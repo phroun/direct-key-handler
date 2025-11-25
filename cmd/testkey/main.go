@@ -9,7 +9,7 @@ import (
 
 func main() {
 	keyboardHandler := keyboard.NewDirectKeyboardHandler(func(message string) {
-		fmt.Fprintln(os.Stderr, message)
+		fmt.Fprint(os.Stderr, message+"\r\n")
 	})
 
 	key := ""
@@ -17,7 +17,8 @@ func main() {
 	for key != "^C" && z < 30 {
 		key = keyboardHandler.GetKey()
 		z++
-		fmt.Println(key)
+		fmt.Print(key + "\r\n")
 	}
+	keyboardHandler.StopListening()
 	os.Exit(1)
 }

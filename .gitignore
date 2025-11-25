@@ -1,6 +1,7 @@
 # Compiled binaries
 /testkey
 *.exe
+/cmd/testkey/testkey
 
 # IDE/Editor files
 .idea/
