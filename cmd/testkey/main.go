@@ -19,5 +19,6 @@ func main() {
 		z++
 		fmt.Print(key + "\r\n")
 	}
+	keyboardHandler.StopListening()
 	os.Exit(1)
 }
