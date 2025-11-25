@@ -1,6 +1,11 @@
 # direct-key-handler
 
-A buffered keyboard input handler for terminal applications with VT100/ANSI escape sequence support.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+*A buffered keyboard input handler for terminal applications with VT100/ANSI escape sequence support.*
+*If you use this, please support me on ko-fi:  [https://ko-fi.com/jeffday](https://ko-fi.com/F2F61JR2B4)*
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/F2F61JR2B4)
 
 Available in both Node.js and Go.
 
@@ -68,3 +73,13 @@ main();
 ## License
 
 MIT
+
+## Change Log
+
+### 0.2.0
+- Still available for Node.js, but also translated to Go.
+- Initial public release
+
+### 0.1.0
+- Created using Node.js, tested mostly with iTerm2 and Cool Retro Terminal
+  on MacOS.
