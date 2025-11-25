@@ -1,0 +1,14 @@
+# Compiled binaries
+/testkey
+*.exe
+
+# IDE/Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
