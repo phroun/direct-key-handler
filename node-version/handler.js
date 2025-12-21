@@ -157,6 +157,13 @@ const kittySpecialKeys = {
 const BRACKETED_PASTE_START = '\x1b[200~';
 const BRACKETED_PASTE_END = '\x1b[201~';
 
+// Number of bytes to keep buffered during paste to avoid splitting the end sequence
+// (\x1b[201~ is 6 bytes, we buffer 7 to be safe)
+const PASTE_END_BUFFER_SIZE = 7;
+
+// Default size for paste chunks (1KB)
+const DEFAULT_PASTE_CHUNK_SIZE = 1024;
+
 /**
  * DirectKeyboardHandler - handles raw keyboard input with escape sequence parsing
  */
@@ -166,13 +173,15 @@ class DirectKeyboardHandler extends EventEmitter {
      * @param {Object} options - Configuration options
      * @param {stream.Readable} options.inputStream - Input stream (default: process.stdin)
      * @param {stream.Writable} options.outputStream - Output stream for echo (default: null)
+     * @param {number} options.pasteChunkSize - Size of chunks emitted during paste (default: 1024)
      * @param {Function} options.debugFn - Debug callback (optional)
      */
     constructor(options = {}) {
         super();
-        
+
         this.inputStream = options.inputStream || process.stdin;
         this.outputStream = options.outputStream || null;
+        this.pasteChunkSize = options.pasteChunkSize || DEFAULT_PASTE_CHUNK_SIZE;
         this.debugFn = options.debugFn || null;
         
         // State
@@ -192,6 +201,7 @@ class DirectKeyboardHandler extends EventEmitter {
         // Bracketed paste state
         this.inPaste = false;
         this.pasteBuffer = Buffer.alloc(0);
+        this.fullPasteContent = Buffer.alloc(0); // Accumulator for full paste content
         
         // Line assembly state
         this.currentLine = Buffer.alloc(0);
@@ -209,6 +219,7 @@ class DirectKeyboardHandler extends EventEmitter {
         this.onKeyCallback = null;
         this.onLineCallback = null;
         this.onPasteCallback = null;
+        this.onPasteChunkCallback = null;
         
         // Bind the data handler
         this._onData = this._onData.bind(this);
@@ -335,6 +346,14 @@ class DirectKeyboardHandler extends EventEmitter {
     onPaste(callback) {
         this.onPasteCallback = callback;
     }
+
+    /**
+     * Set callback for incremental paste chunk events
+     * @param {Function} callback - Called with {content: Buffer, isFinal: boolean}
+     */
+    onPasteChunk(callback) {
+        this.onPasteChunkCallback = callback;
+    }
     
     /**
      * Get the next key (async)
@@ -391,18 +410,39 @@ class DirectKeyboardHandler extends EventEmitter {
         // Handle bracketed paste mode
         if (this.inPaste) {
             this.pasteBuffer = Buffer.concat([this.pasteBuffer, Buffer.from([b])]);
-            
+            this.fullPasteContent = Buffer.concat([this.fullPasteContent, Buffer.from([b])]);
+
             // Check if paste buffer ends with the end sequence
             if (this.pasteBuffer.length >= BRACKETED_PASTE_END.length) {
                 const tail = this.pasteBuffer.slice(-BRACKETED_PASTE_END.length).toString();
                 if (tail === BRACKETED_PASTE_END) {
-                    // End of paste
-                    const content = this.pasteBuffer.slice(0, -BRACKETED_PASTE_END.length);
+                    // End of paste - extract remaining content (without the end sequence)
+                    const remainingContent = this.pasteBuffer.slice(0, -BRACKETED_PASTE_END.length);
+                    // Full content is everything accumulated minus the end sequence
+                    const fullContent = this.fullPasteContent.slice(0, -BRACKETED_PASTE_END.length);
                     this.inPaste = false;
                     this.pasteBuffer = Buffer.alloc(0);
-                    this._debug(`Paste end, ${content.length} bytes`);
-                    this._emitPaste(content);
+                    this.fullPasteContent = Buffer.alloc(0);
+                    this._debug(`Paste end, ${fullContent.length} bytes`);
+                    // Emit final chunk if callback is set (only the remaining buffered content)
+                    if (this.onPasteChunkCallback) {
+                        this.onPasteChunkCallback({ content: remainingContent, isFinal: true });
+                    }
+                    this.emit('pasteChunk', { content: remainingContent, isFinal: true });
+                    // emitPaste receives full content for onPaste callback and key emission
+                    this._emitPaste(fullContent);
+                    return;
                 }
+            }
+
+            // Emit incremental chunks when we have enough data
+            // We emit when buffer >= chunkSize + PASTE_END_BUFFER_SIZE (to keep 7 bytes for end detection)
+            if (this.onPasteChunkCallback && this.pasteBuffer.length >= this.pasteChunkSize + PASTE_END_BUFFER_SIZE) {
+                // Emit a full chunk, keeping PASTE_END_BUFFER_SIZE bytes buffered
+                const chunk = this.pasteBuffer.slice(0, this.pasteChunkSize);
+                this.pasteBuffer = this.pasteBuffer.slice(this.pasteChunkSize);
+                this.onPasteChunkCallback({ content: chunk, isFinal: false });
+                this.emit('pasteChunk', { content: chunk, isFinal: false });
             }
             return;
         }
@@ -417,6 +457,7 @@ class DirectKeyboardHandler extends EventEmitter {
                 this.escBuffer = '';
                 this.inPaste = true;
                 this.pasteBuffer = Buffer.alloc(0);
+                this.fullPasteContent = Buffer.alloc(0);
                 this._clearEscTimeout();
                 return;
             }

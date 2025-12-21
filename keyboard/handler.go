@@ -13,6 +13,12 @@ import (
 	"golang.org/x/term"
 )
 
+// PasteChunk represents an incremental chunk of bracketed paste content
+type PasteChunk struct {
+	Content []byte // The chunk content
+	IsFinal bool   // True if this is the final chunk
+}
+
 // Handler handles raw keyboard input, parsing escape sequences
 // and providing both key events and line assembly.
 type Handler struct {
@@ -28,9 +34,10 @@ type Handler struct {
 	Lines chan []byte  // Assembled lines
 
 	// Callbacks (optional, called in addition to channel sends)
-	OnKey   func(key string)     // Called on each key event
-	OnLine  func(line []byte)    // Called on each completed line
-	OnPaste func(content []byte) // Called on bracketed paste content
+	OnKey        func(key string)     // Called on each key event
+	OnLine       func(line []byte)    // Called on each completed line
+	OnPaste      func(content []byte) // Called on bracketed paste content (complete)
+	OnPasteChunk func(chunk PasteChunk) // Called on incremental paste chunks
 
 	// Terminal handling (only used if input is os.Stdin and is a terminal)
 	terminalFd        int         // File descriptor if we're managing terminal mode
@@ -55,8 +62,10 @@ type Handler struct {
 	utf8Remaining int // bytes remaining to complete current UTF-8 char
 
 	// Bracketed paste state
-	inPaste     bool
-	pasteBuffer []byte
+	inPaste          bool
+	pasteBuffer      []byte // Buffer for detecting end sequence (kept small for chunking)
+	fullPasteContent []byte // Accumulator for full paste content (for OnPaste callback)
+	pasteChunkSize   int    // Size of chunks to emit during paste (default: 1024)
 
 	// Echo output (where to echo typed characters)
 	echoWriter io.Writer
@@ -79,6 +88,10 @@ type Options struct {
 	// LineBufferSize is the size of the Lines channel buffer (default: 16)
 	LineBufferSize int
 
+	// PasteChunkSize is the size of chunks emitted during bracketed paste (default: 1024)
+	// Only used when OnPasteChunk callback is set
+	PasteChunkSize int
+
 	// DebugFn is called with debug messages (optional)
 	DebugFn func(string)
 
@@ -98,6 +111,10 @@ func New(opts Options) *Handler {
 	if lineBufSize <= 0 {
 		lineBufSize = 16
 	}
+	pasteChunkSize := opts.PasteChunkSize
+	if pasteChunkSize <= 0 {
+		pasteChunkSize = DefaultPasteChunkSize
+	}
 
 	manageTerminal := true
 	if opts.ManageTerminal != nil {
@@ -105,14 +122,15 @@ func New(opts Options) *Handler {
 	}
 
 	h := &Handler{
-		inputReader: opts.InputReader,
-		rawBytes:    make(chan []byte, 64),
-		stopChan:    make(chan struct{}),
-		Keys:        make(chan string, keyBufSize),
-		Lines:       make(chan []byte, lineBufSize),
-		echoWriter:  opts.EchoWriter,
-		debugFn:     opts.DebugFn,
-		terminalFd:  -1,
+		inputReader:    opts.InputReader,
+		rawBytes:       make(chan []byte, 64),
+		stopChan:       make(chan struct{}),
+		Keys:           make(chan string, keyBufSize),
+		Lines:          make(chan []byte, lineBufSize),
+		echoWriter:     opts.EchoWriter,
+		debugFn:        opts.DebugFn,
+		terminalFd:     -1,
+		pasteChunkSize: pasteChunkSize,
 	}
 
 	// Check if input is a terminal file descriptor
@@ -382,24 +400,50 @@ const (
 	bracketedPasteEnd   = "\x1b[201~"
 )
 
+// pasteEndBufferSize is the number of bytes to keep buffered during paste
+// to avoid splitting the end sequence (\x1b[201~ is 6 bytes, we buffer 7 to be safe)
+const pasteEndBufferSize = 7
+
+// DefaultPasteChunkSize is the default size for paste chunks (1KB)
+const DefaultPasteChunkSize = 1024
+
 // processByte handles a single byte of input
 func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 	// Handle bracketed paste mode
 	if h.inPaste {
 		h.pasteBuffer = append(h.pasteBuffer, b)
+		h.fullPasteContent = append(h.fullPasteContent, b)
 
 		// Check if paste buffer ends with the end sequence
 		if len(h.pasteBuffer) >= len(bracketedPasteEnd) {
 			tail := string(h.pasteBuffer[len(h.pasteBuffer)-len(bracketedPasteEnd):])
 			if tail == bracketedPasteEnd {
-				// End of paste - extract content (without the end sequence)
-				content := h.pasteBuffer[:len(h.pasteBuffer)-len(bracketedPasteEnd)]
+				// End of paste - extract remaining content (without the end sequence)
+				remainingContent := h.pasteBuffer[:len(h.pasteBuffer)-len(bracketedPasteEnd)]
+				// Full content is everything accumulated minus the end sequence
+				fullContent := h.fullPasteContent[:len(h.fullPasteContent)-len(bracketedPasteEnd)]
 				h.inPaste = false
 				h.pasteBuffer = nil
-				h.debug(fmt.Sprintf("Paste end, %d bytes", len(content)))
-				h.emitPaste(content)
+				h.fullPasteContent = nil
+				h.debug(fmt.Sprintf("Paste end, %d bytes", len(fullContent)))
+				// Emit final chunk if callback is set (only the remaining buffered content)
+				if h.OnPasteChunk != nil {
+					h.OnPasteChunk(PasteChunk{Content: remainingContent, IsFinal: true})
+				}
+				// emitPaste receives full content for OnPaste callback and key emission
+				h.emitPaste(fullContent)
 				return
 			}
+		}
+
+		// Emit incremental chunks when we have enough data
+		// We emit when buffer >= chunkSize + pasteEndBufferSize (to keep 7 bytes for end detection)
+		if h.OnPasteChunk != nil && len(h.pasteBuffer) >= h.pasteChunkSize+pasteEndBufferSize {
+			// Emit a full chunk, keeping pasteEndBufferSize bytes buffered
+			chunk := make([]byte, h.pasteChunkSize)
+			copy(chunk, h.pasteBuffer[:h.pasteChunkSize])
+			h.pasteBuffer = h.pasteBuffer[h.pasteChunkSize:]
+			h.OnPasteChunk(PasteChunk{Content: chunk, IsFinal: false})
 		}
 		return
 	}
@@ -417,6 +461,7 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			h.escBuffer = nil
 			h.inPaste = true
 			h.pasteBuffer = nil
+			h.fullPasteContent = nil
 			escTimeout.Stop()
 			return
 		}
