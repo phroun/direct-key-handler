@@ -8,17 +8,23 @@ import (
 )
 
 func main() {
-	keyboardHandler := keyboard.NewDirectKeyboardHandler(func(message string) {
-		fmt.Fprint(os.Stderr, message+"\r\n")
+	handler := keyboard.New(keyboard.Options{
+		InputReader: os.Stdin,
+		EchoWriter:  nil, // No echo for raw key testing
 	})
 
-	key := ""
-	z := 0
-	for key != "^C" && z < 30 {
-		key = keyboardHandler.GetKey()
-		z++
-		fmt.Print(key + "\r\n")
+	if err := handler.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start: %v\n", err)
+		os.Exit(1)
 	}
-	keyboardHandler.StopListening()
-	os.Exit(1)
+	defer handler.Stop()
+
+	fmt.Println("Press keys (Ctrl+C to exit):")
+
+	for key := range handler.Keys {
+		fmt.Printf("Key: %q\n", key)
+		if key == "^C" {
+			break
+		}
+	}
 }
