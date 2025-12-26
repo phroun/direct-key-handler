@@ -1505,7 +1505,12 @@ func parseKittyProtocol(parts []string) (string, bool) {
 		return "", false
 	}
 
-	keycode := parseModifierParam(parts[0])
+	// Parse keycode - handle extended format "keycode:shifted_key:base_key"
+	keycodeStr := parts[0]
+	if idx := strings.Index(keycodeStr, ":"); idx >= 0 {
+		keycodeStr = keycodeStr[:idx]
+	}
+	keycode := parseModifierParam(keycodeStr)
 
 	// Parse modifiers and event type from second part
 	// Format can be: "modifiers" or "modifiers:event_type"

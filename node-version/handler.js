@@ -1293,7 +1293,13 @@ class DirectKeyboardHandler extends EventEmitter {
     _parseKittyProtocol(parts) {
         if (parts.length === 0) return null;
 
-        const keycode = this._parseModifierParam(parts[0]);
+        // Parse keycode - handle extended format "keycode:shifted_key:base_key"
+        let keycodeStr = parts[0];
+        const colonIdx = keycodeStr.indexOf(':');
+        if (colonIdx >= 0) {
+            keycodeStr = keycodeStr.substring(0, colonIdx);
+        }
+        const keycode = this._parseModifierParam(keycodeStr);
 
         // Parse modifiers and event type from second part
         // Format can be: "modifiers" or "modifiers:event_type"
