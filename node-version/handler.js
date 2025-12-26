@@ -194,19 +194,20 @@ const kittySpecialKeys = {
 };
 
 // Kitty protocol modifier keys (for press/release events)
+// Format: { name, side } where side is 'Left' or 'Right'
 const kittyModifierKeys = {
-    57441: 'Shift',      // Left Shift
-    57442: 'Shift',      // Right Shift
-    57443: 'Ctrl',       // Left Control
-    57444: 'Ctrl',       // Right Control
-    57445: 'Alt',        // Left Alt
-    57446: 'Alt',        // Right Alt
-    57447: 'Super',      // Left Super
-    57448: 'Super',      // Right Super
-    57449: 'Hyper',      // Left Hyper
-    57450: 'Hyper',      // Right Hyper
-    57451: 'Meta',       // Left Meta
-    57452: 'Meta',       // Right Meta
+    57441: { name: 'Shift', side: 'Left' },
+    57442: { name: 'Shift', side: 'Right' },
+    57443: { name: 'Ctrl', side: 'Left' },
+    57444: { name: 'Ctrl', side: 'Right' },
+    57445: { name: 'Alt', side: 'Left' },
+    57446: { name: 'Alt', side: 'Right' },
+    57447: { name: 'Super', side: 'Left' },
+    57448: { name: 'Super', side: 'Right' },
+    57449: { name: 'Hyper', side: 'Left' },
+    57450: { name: 'Hyper', side: 'Right' },
+    57451: { name: 'Meta', side: 'Left' },
+    57452: { name: 'Meta', side: 'Right' },
 };
 
 // Bracketed paste sequences
@@ -1304,11 +1305,11 @@ class DirectKeyboardHandler extends EventEmitter {
         }
 
         // Check if this is a modifier key press/release
-        const modKeyName = kittyModifierKeys[keycode];
-        if (modKeyName) {
+        const modKeyInfo = kittyModifierKeys[keycode];
+        if (modKeyInfo) {
             // Map modifier names to our prefix convention
             let prefix = '';
-            switch (modKeyName) {
+            switch (modKeyInfo.name) {
                 case 'Shift': prefix = 'S'; break;
                 case 'Ctrl': prefix = 'C'; break;
                 case 'Alt': prefix = 'Alt'; break;  // Use Alt instead of M to avoid confusion
@@ -1318,14 +1319,16 @@ class DirectKeyboardHandler extends EventEmitter {
             }
 
             // Event type suffix
-            let suffix = '';
+            let eventSuffix = '';
             switch (eventType) {
-                case 1: suffix = '-Press'; break;
-                case 2: suffix = '-Repeat'; break;
-                case 3: suffix = '-Release'; break;
+                case 1: eventSuffix = '-Press'; break;
+                case 2: eventSuffix = '-Repeat'; break;
+                case 3: eventSuffix = '-Release'; break;
             }
 
-            return prefix + suffix;
+            // Add :Left or :Right suffix to distinguish sides
+            // Apps can match on "S-Press" to catch both, or "S-Press:Left" for specific side
+            return prefix + eventSuffix + ':' + modKeyInfo.side;
         }
 
         // Build event suffix for non-modifier keys (only for release, press is default)

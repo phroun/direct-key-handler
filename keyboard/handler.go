@@ -1469,20 +1469,26 @@ var kittySpecialKeys = map[int]string{
 	57426: "Delete",
 }
 
+// modifierKeyInfo holds modifier name and side (Left/Right)
+type modifierKeyInfo struct {
+	name string
+	side string
+}
+
 // Kitty protocol modifier keys (for press/release events)
-var kittyModifierKeys = map[int]string{
-	57441: "Shift",  // Left Shift
-	57442: "Shift",  // Right Shift
-	57443: "Ctrl",   // Left Control
-	57444: "Ctrl",   // Right Control
-	57445: "Alt",    // Left Alt
-	57446: "Alt",    // Right Alt
-	57447: "Super",  // Left Super
-	57448: "Super",  // Right Super
-	57449: "Hyper",  // Left Hyper
-	57450: "Hyper",  // Right Hyper
-	57451: "Meta",   // Left Meta
-	57452: "Meta",   // Right Meta
+var kittyModifierKeys = map[int]modifierKeyInfo{
+	57441: {"Shift", "Left"},
+	57442: {"Shift", "Right"},
+	57443: {"Ctrl", "Left"},
+	57444: {"Ctrl", "Right"},
+	57445: {"Alt", "Left"},
+	57446: {"Alt", "Right"},
+	57447: {"Super", "Left"},
+	57448: {"Super", "Right"},
+	57449: {"Hyper", "Left"},
+	57450: {"Hyper", "Right"},
+	57451: {"Meta", "Left"},
+	57452: {"Meta", "Right"},
 }
 
 // parseKittyProtocol handles CSI keycode ; modifiers : event_type u format
@@ -1512,10 +1518,10 @@ func parseKittyProtocol(parts []string) (string, bool) {
 	}
 
 	// Check if this is a modifier key press/release
-	if modKeyName, ok := kittyModifierKeys[keycode]; ok {
+	if modKeyInfo, ok := kittyModifierKeys[keycode]; ok {
 		// Map modifier names to our prefix convention
 		var prefix string
-		switch modKeyName {
+		switch modKeyInfo.name {
 		case "Shift":
 			prefix = "S"
 		case "Ctrl":
@@ -1531,17 +1537,19 @@ func parseKittyProtocol(parts []string) (string, bool) {
 		}
 
 		// Event type suffix
-		var suffix string
+		var eventSuffix string
 		switch eventType {
 		case 1:
-			suffix = "-Press"
+			eventSuffix = "-Press"
 		case 2:
-			suffix = "-Repeat"
+			eventSuffix = "-Repeat"
 		case 3:
-			suffix = "-Release"
+			eventSuffix = "-Release"
 		}
 
-		return prefix + suffix, true
+		// Add :Left or :Right suffix to distinguish sides
+		// Apps can match on "S-Press" to catch both, or "S-Press:Left" for specific side
+		return prefix + eventSuffix + ":" + modKeyInfo.side, true
 	}
 
 	// Build event suffix for non-modifier keys (only for release, press is default)
