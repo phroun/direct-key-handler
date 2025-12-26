@@ -742,6 +742,10 @@ func (h *Handler) couldBeEscapePrefix(seq string) bool {
 		}
 
 		// Regular CSI sequence - wait for terminator
+		// Need at least 3 chars (ESC [ <final>) before checking termination
+		if len(seq) < 3 {
+			return true // Still waiting for parameters/final byte
+		}
 		last := seq[len(seq)-1]
 		if last >= 0x40 && last <= 0x7e {
 			return false // Terminated
@@ -1456,6 +1460,8 @@ var kittySpecialKeys = map[int]string{
 	57381: "F18",
 	57382: "F19",
 	57383: "F20",
+	// Keypad
+	57414: "Return", // KP_Enter - distinct from Enter (13)
 	// Navigation
 	57417: "Up",
 	57418: "Down",
@@ -1476,18 +1482,19 @@ type modifierKeyInfo struct {
 }
 
 // Kitty protocol modifier keys (for press/release events)
+// Left modifiers are 57441-57446, Right modifiers are 57447-57452
 var kittyModifierKeys = map[int]modifierKeyInfo{
 	57441: {"Shift", "Left"},
-	57442: {"Shift", "Right"},
-	57443: {"Ctrl", "Left"},
-	57444: {"Ctrl", "Right"},
-	57445: {"Alt", "Left"},
-	57446: {"Alt", "Right"},
-	57447: {"Super", "Left"},
-	57448: {"Super", "Right"},
-	57449: {"Hyper", "Left"},
-	57450: {"Hyper", "Right"},
-	57451: {"Meta", "Left"},
+	57442: {"Ctrl", "Left"},
+	57443: {"Alt", "Left"},
+	57444: {"Super", "Left"},
+	57445: {"Hyper", "Left"},
+	57446: {"Meta", "Left"},
+	57447: {"Shift", "Right"},
+	57448: {"Ctrl", "Right"},
+	57449: {"Alt", "Right"},
+	57450: {"Super", "Right"},
+	57451: {"Hyper", "Right"},
 	57452: {"Meta", "Right"},
 }
 

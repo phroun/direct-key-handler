@@ -180,6 +180,8 @@ const kittySpecialKeys = {
     57381: 'F18',
     57382: 'F19',
     57383: 'F20',
+    // Keypad
+    57414: 'Return',  // KP_Enter - distinct from Enter (13)
     // Navigation
     57417: 'Up',
     57418: 'Down',
@@ -195,18 +197,19 @@ const kittySpecialKeys = {
 
 // Kitty protocol modifier keys (for press/release events)
 // Format: { name, side } where side is 'Left' or 'Right'
+// Left modifiers are 57441-57446, Right modifiers are 57447-57452
 const kittyModifierKeys = {
     57441: { name: 'Shift', side: 'Left' },
-    57442: { name: 'Shift', side: 'Right' },
-    57443: { name: 'Ctrl', side: 'Left' },
-    57444: { name: 'Ctrl', side: 'Right' },
-    57445: { name: 'Alt', side: 'Left' },
-    57446: { name: 'Alt', side: 'Right' },
-    57447: { name: 'Super', side: 'Left' },
-    57448: { name: 'Super', side: 'Right' },
-    57449: { name: 'Hyper', side: 'Left' },
-    57450: { name: 'Hyper', side: 'Right' },
-    57451: { name: 'Meta', side: 'Left' },
+    57442: { name: 'Ctrl', side: 'Left' },
+    57443: { name: 'Alt', side: 'Left' },
+    57444: { name: 'Super', side: 'Left' },
+    57445: { name: 'Hyper', side: 'Left' },
+    57446: { name: 'Meta', side: 'Left' },
+    57447: { name: 'Shift', side: 'Right' },
+    57448: { name: 'Ctrl', side: 'Right' },
+    57449: { name: 'Alt', side: 'Right' },
+    57450: { name: 'Super', side: 'Right' },
+    57451: { name: 'Hyper', side: 'Right' },
     57452: { name: 'Meta', side: 'Right' },
 };
 
@@ -780,6 +783,10 @@ class DirectKeyboardHandler extends EventEmitter {
             }
 
             // Regular CSI sequence - wait for terminator
+            // Need at least 3 chars (ESC [ <final>) before checking termination
+            if (seq.length < 3) {
+                return true; // Still waiting for parameters/final byte
+            }
             const last = seq.charCodeAt(seq.length - 1);
             if (last >= 0x40 && last <= 0x7e) {
                 return false; // Terminated
