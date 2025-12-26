@@ -1239,7 +1239,7 @@ func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
 	case '~':
 		return parseModifiedTildeKey(parts)
 	case 'u':
-		return parseKittyProtocol(parts)
+		return h.parseKittyProtocol(parts)
 	}
 
 	return "", false
@@ -1500,7 +1500,7 @@ var kittyModifierKeys = map[int]modifierKeyInfo{
 
 // parseKittyProtocol handles CSI keycode ; modifiers : event_type u format
 // Event types: 1=press, 2=repeat, 3=release
-func parseKittyProtocol(parts []string) (string, bool) {
+func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	if len(parts) == 0 {
 		return "", false
 	}
@@ -1599,6 +1599,42 @@ func parseKittyProtocol(parts []string) (string, bool) {
 			baseName = string(rune(keycode))
 		} else {
 			return "", false
+		}
+	}
+
+	// Check for macOS Option character decoding in Kitty protocol
+	// e.g., Ctrl+´ should become M-^E since ´ = Option+e
+	h.mu.Lock()
+	decodeMacOS := h.decodeMacOSOption
+	h.mu.Unlock()
+
+	if decodeMacOS && len(baseName) > 0 {
+		r := rune(baseName[0])
+		if len(baseName) == len(string(r)) { // Single rune
+			if decoded, exists := macOSOptionChars[r]; exists {
+				// decoded is like "M-e" or "M-A"
+				if len(decoded) >= 3 && decoded[0] == 'M' && decoded[1] == '-' {
+					baseChar := decoded[2:]
+
+					// Check modifiers from Kitty protocol (mod is 1-indexed)
+					hasCtrl := mod > 1 && (mod-1)&4 != 0
+					hasShift := mod > 1 && (mod-1)&1 != 0
+
+					// Build result with M- prefix (Option/Meta is implicit from decode)
+					result := "M-"
+					if hasShift {
+						result += "S-"
+					}
+					if hasCtrl {
+						// Format Ctrl+char as ^X
+						result += "^" + strings.ToUpper(baseChar)
+					} else {
+						result += baseChar
+					}
+
+					return result + eventSuffix, true
+				}
+			}
 		}
 	}
 

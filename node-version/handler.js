@@ -1386,6 +1386,32 @@ class DirectKeyboardHandler extends EventEmitter {
             }
         }
 
+        // Check for macOS Option character decoding in Kitty protocol
+        // e.g., Ctrl+´ should become M-^E since ´ = Option+e
+        if (this.decodeMacOSOption && baseName.length === 1) {
+            const decoded = macOSOptionChars[baseName];
+            if (decoded && decoded.startsWith('M-') && decoded.length >= 3) {
+                // Extract base character from decoded "M-e" format
+                const baseChar = decoded.substring(2);
+
+                // Check modifiers from Kitty protocol (mod is 1-indexed)
+                const hasCtrl = mod > 1 && ((mod - 1) & 4) !== 0;
+                const hasShift = mod > 1 && ((mod - 1) & 1) !== 0;
+
+                // Build result with M- prefix (Option/Meta is implicit from decode)
+                let result = 'M-';
+                if (hasShift) result += 'S-';
+                if (hasCtrl) {
+                    // Format Ctrl+char as ^X
+                    result += '^' + baseChar.toUpperCase();
+                } else {
+                    result += baseChar;
+                }
+
+                return result + eventSuffix;
+            }
+        }
+
         if (mod <= 1) return baseName + eventSuffix;
 
         const prefix = this._modifierPrefix(mod);
