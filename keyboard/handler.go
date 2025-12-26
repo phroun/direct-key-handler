@@ -1609,8 +1609,8 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	h.mu.Unlock()
 
 	if decodeMacOS && len(baseName) > 0 {
-		r := rune(baseName[0])
-		if len(baseName) == len(string(r)) { // Single rune
+		r, size := utf8.DecodeRuneInString(baseName)
+		if size == len(baseName) && r != utf8.RuneError { // Single rune
 			if decoded, exists := macOSOptionChars[r]; exists {
 				// decoded is like "M-e" or "M-A"
 				if len(decoded) >= 3 && decoded[0] == 'M' && decoded[1] == '-' {
