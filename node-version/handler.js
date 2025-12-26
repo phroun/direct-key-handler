@@ -679,13 +679,17 @@ class DirectKeyboardHandler extends EventEmitter {
             if (seq.length === 2) {
                 return true; // Wait for more
             }
-            // ESC ESC [ - wait for arrow key
-            if (seq.length >= 3 && seq[2] === '[') {
+            // ESC ESC [ - wait for arrow key (need 4 chars total: ESC ESC [ X)
+            if (seq[2] === '[') {
+                if (seq.length < 4) {
+                    return true; // Still waiting for the arrow key letter
+                }
+                // Length >= 4, check if terminated with A/B/C/D/H/F
                 const last = seq.charCodeAt(seq.length - 1);
                 if (last >= 0x40 && last <= 0x7e) {
                     return false; // Terminated
                 }
-                return true; // Still in progress
+                return true; // Still in progress (shouldn't happen for this pattern)
             }
         }
 
