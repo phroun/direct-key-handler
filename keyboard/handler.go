@@ -1527,7 +1527,7 @@ func parseKittyProtocol(parts []string) (string, bool) {
 		case "Ctrl":
 			prefix = "C"
 		case "Alt":
-			prefix = "Alt" // Use Alt instead of M to avoid confusion
+			prefix = "A"
 		case "Super":
 			prefix = "s"
 		case "Meta":

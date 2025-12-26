@@ -1312,7 +1312,7 @@ class DirectKeyboardHandler extends EventEmitter {
             switch (modKeyInfo.name) {
                 case 'Shift': prefix = 'S'; break;
                 case 'Ctrl': prefix = 'C'; break;
-                case 'Alt': prefix = 'Alt'; break;  // Use Alt instead of M to avoid confusion
+                case 'Alt': prefix = 'A'; break;
                 case 'Super': prefix = 's'; break;
                 case 'Meta': prefix = 'M'; break;
                 case 'Hyper': prefix = 'H'; break;
