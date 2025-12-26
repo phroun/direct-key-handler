@@ -171,19 +171,23 @@ const macOSOptionChars = {
     '∫': 'M-b', // Option+b
     'ç': 'M-c', // Option+c
     '∂': 'M-d', // Option+d
+    '´': 'M-e', // Option+e (dead key - acute accent)
     'ƒ': 'M-f', // Option+f
     '©': 'M-g', // Option+g
     '˙': 'M-h', // Option+h
+    'ˆ': 'M-i', // Option+i (dead key - circumflex)
     '∆': 'M-j', // Option+j
     '˚': 'M-k', // Option+k
     '¬': 'M-l', // Option+l
     'µ': 'M-m', // Option+m
+    '˜': 'M-n', // Option+n (dead key - tilde)
     'ø': 'M-o', // Option+o
     'π': 'M-p', // Option+p
     'œ': 'M-q', // Option+q
     '®': 'M-r', // Option+r
     'ß': 'M-s', // Option+s
     '†': 'M-t', // Option+t
+    '¨': 'M-u', // Option+u (dead key - diaeresis)
     '√': 'M-v', // Option+v
     '∑': 'M-w', // Option+w
     '≈': 'M-x', // Option+x
@@ -195,19 +199,23 @@ const macOSOptionChars = {
     'ı': 'M-B', // Option+Shift+b
     'Ç': 'M-C', // Option+Shift+c
     'Î': 'M-D', // Option+Shift+d
+    // Option+Shift+E produces ´ (same as Option+e) - handled above
     'Ï': 'M-F', // Option+Shift+f
     '˝': 'M-G', // Option+Shift+g
     'Ó': 'M-H', // Option+Shift+h
+    // Option+Shift+I produces ˆ (same as Option+i) - handled above
     'Ô': 'M-J', // Option+Shift+j
     '\uF8FF': 'M-K', // Option+Shift+k (Apple logo)
     'Ò': 'M-L', // Option+Shift+l
     'Â': 'M-M', // Option+Shift+m
+    // Option+Shift+N produces ˜ (same as Option+n) - handled above
     'Ø': 'M-O', // Option+Shift+o
     '∏': 'M-P', // Option+Shift+p
     'Œ': 'M-Q', // Option+Shift+q
     '‰': 'M-R', // Option+Shift+r
     'Í': 'M-S', // Option+Shift+s
     'ˇ': 'M-T', // Option+Shift+t
+    // Option+Shift+U produces ¨ (same as Option+u) - handled above
     '◊': 'M-V', // Option+Shift+v
     '„': 'M-W', // Option+Shift+w
     '˛': 'M-X', // Option+Shift+x
