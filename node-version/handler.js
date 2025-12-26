@@ -249,7 +249,7 @@ class DirectKeyboardHandler extends EventEmitter {
      * @param {stream.Readable} options.inputStream - Input stream (default: process.stdin)
      * @param {stream.Writable} options.outputStream - Output stream for echo (default: null)
      * @param {number} options.pasteChunkSize - Size of chunks emitted during paste (default: 1024)
-     * @param {boolean} options.decodeMacOSOption - Decode macOS Option+key chars to M-key (default: false)
+     * @param {boolean} options.decodeMacOSOption - Decode macOS Option+key chars to M-key (default: true on Darwin, false otherwise)
      * @param {Function} options.debugFn - Debug callback (optional)
      */
     constructor(options = {}) {
@@ -258,7 +258,10 @@ class DirectKeyboardHandler extends EventEmitter {
         this.inputStream = options.inputStream || process.stdin;
         this.outputStream = options.outputStream || null;
         this.pasteChunkSize = options.pasteChunkSize || DEFAULT_PASTE_CHUNK_SIZE;
-        this.decodeMacOSOption = options.decodeMacOSOption || false;
+        // Default to true on Darwin (macOS), false otherwise
+        this.decodeMacOSOption = options.decodeMacOSOption !== undefined
+            ? options.decodeMacOSOption
+            : process.platform === 'darwin';
         this.debugFn = options.debugFn || null;
         
         // State

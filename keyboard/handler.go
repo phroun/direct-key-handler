@@ -6,6 +6,7 @@ package keyboard
 import (
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -96,8 +97,8 @@ type Options struct {
 	PasteChunkSize int
 
 	// DecodeMacOSOption enables decoding of macOS Option+key Unicode characters
-	// to M-key notation (e.g., ∂ → M-d, Ø → M-O). Default: false
-	DecodeMacOSOption bool
+	// to M-key notation (e.g., ∂ → M-d, Ø → M-O). Default: true on Darwin, false otherwise
+	DecodeMacOSOption *bool
 
 	// DebugFn is called with debug messages (optional)
 	DebugFn func(string)
@@ -128,6 +129,12 @@ func New(opts Options) *Handler {
 		manageTerminal = *opts.ManageTerminal
 	}
 
+	// Default to true on Darwin (macOS), false otherwise
+	decodeMacOSOption := runtime.GOOS == "darwin"
+	if opts.DecodeMacOSOption != nil {
+		decodeMacOSOption = *opts.DecodeMacOSOption
+	}
+
 	h := &Handler{
 		inputReader:       opts.InputReader,
 		rawBytes:          make(chan []byte, 64),
@@ -138,7 +145,7 @@ func New(opts Options) *Handler {
 		debugFn:           opts.DebugFn,
 		terminalFd:        -1,
 		pasteChunkSize:    pasteChunkSize,
-		decodeMacOSOption: opts.DecodeMacOSOption,
+		decodeMacOSOption: decodeMacOSOption,
 	}
 
 	// Check if input is a terminal file descriptor
