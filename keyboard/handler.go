@@ -67,6 +67,9 @@ type Handler struct {
 	fullPasteContent []byte // Accumulator for full paste content (for OnPaste callback)
 	pasteChunkSize   int    // Size of chunks to emit during paste (default: 1024)
 
+	// macOS Option key decoding
+	decodeMacOSOption bool // When true, decode macOS Option+key chars to M-key notation
+
 	// Echo output (where to echo typed characters)
 	echoWriter io.Writer
 
@@ -91,6 +94,10 @@ type Options struct {
 	// PasteChunkSize is the size of chunks emitted during bracketed paste (default: 1024)
 	// Only used when OnPasteChunk callback is set
 	PasteChunkSize int
+
+	// DecodeMacOSOption enables decoding of macOS Option+key Unicode characters
+	// to M-key notation (e.g., ∂ → M-d, Ø → M-O). Default: false
+	DecodeMacOSOption bool
 
 	// DebugFn is called with debug messages (optional)
 	DebugFn func(string)
@@ -122,15 +129,16 @@ func New(opts Options) *Handler {
 	}
 
 	h := &Handler{
-		inputReader:    opts.InputReader,
-		rawBytes:       make(chan []byte, 64),
-		stopChan:       make(chan struct{}),
-		Keys:           make(chan string, keyBufSize),
-		Lines:          make(chan []byte, lineBufSize),
-		echoWriter:     opts.EchoWriter,
-		debugFn:        opts.DebugFn,
-		terminalFd:     -1,
-		pasteChunkSize: pasteChunkSize,
+		inputReader:       opts.InputReader,
+		rawBytes:          make(chan []byte, 64),
+		stopChan:          make(chan struct{}),
+		Keys:              make(chan string, keyBufSize),
+		Lines:             make(chan []byte, lineBufSize),
+		echoWriter:        opts.EchoWriter,
+		debugFn:           opts.DebugFn,
+		terminalFd:        -1,
+		pasteChunkSize:    pasteChunkSize,
+		decodeMacOSOption: opts.DecodeMacOSOption,
 	}
 
 	// Check if input is a terminal file descriptor
@@ -243,6 +251,21 @@ func (h *Handler) ManagesTerminal() bool {
 	return h.managesTerminal
 }
 
+// SetDecodeMacOSOption enables or disables decoding of macOS Option+key
+// Unicode characters to M-key notation (e.g., ∂ → M-d).
+func (h *Handler) SetDecodeMacOSOption(enabled bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.decodeMacOSOption = enabled
+}
+
+// DecodeMacOSOption returns true if macOS Option character decoding is enabled.
+func (h *Handler) DecodeMacOSOption() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.decodeMacOSOption
+}
+
 // Escape sequence bindings - maps escape sequences to key names
 var escBindings = map[string]string{
 	// Arrow keys
@@ -331,6 +354,83 @@ var controlKeys = map[byte]string{
 	30:  "^^",
 	31:  "^_",
 	127: "Backspace", // DEL
+}
+
+// macOSOptionChars maps Unicode characters produced by macOS Option+key to M-key notation
+// This is for US keyboard layout
+var macOSOptionChars = map[rune]string{
+	// Lowercase Option+letter
+	'å': "M-a", // Option+a
+	'∫': "M-b", // Option+b
+	'ç': "M-c", // Option+c
+	'∂': "M-d", // Option+d
+	'ƒ': "M-f", // Option+f
+	'©': "M-g", // Option+g
+	'˙': "M-h", // Option+h
+	'∆': "M-j", // Option+j
+	'˚': "M-k", // Option+k
+	'¬': "M-l", // Option+l
+	'µ': "M-m", // Option+m
+	'ø': "M-o", // Option+o
+	'π': "M-p", // Option+p
+	'œ': "M-q", // Option+q
+	'®': "M-r", // Option+r
+	'ß': "M-s", // Option+s
+	'†': "M-t", // Option+t
+	'√': "M-v", // Option+v
+	'∑': "M-w", // Option+w
+	'≈': "M-x", // Option+x
+	'¥': "M-y", // Option+y
+	'Ω': "M-z", // Option+z
+
+	// Uppercase Option+Shift+letter (use M-X for uppercase, not M-S-x)
+	'Å': "M-A", // Option+Shift+a
+	'ı': "M-B", // Option+Shift+b
+	'Ç': "M-C", // Option+Shift+c (on some layouts)
+	'Î': "M-D", // Option+Shift+d
+	'Ï': "M-F", // Option+Shift+f
+	'˝': "M-G", // Option+Shift+g
+	'Ó': "M-H", // Option+Shift+h
+	'Ô': "M-J", // Option+Shift+j
+	'\uF8FF': "M-K", // Option+Shift+k (Apple logo, private use area)
+	'Ò': "M-L", // Option+Shift+l
+	'Â': "M-M", // Option+Shift+m
+	'Ø': "M-O", // Option+Shift+o
+	'∏': "M-P", // Option+Shift+p
+	'Œ': "M-Q", // Option+Shift+q
+	'‰': "M-R", // Option+Shift+r
+	'Í': "M-S", // Option+Shift+s
+	'ˇ': "M-T", // Option+Shift+t
+	'◊': "M-V", // Option+Shift+v
+	'„': "M-W", // Option+Shift+w
+	'˛': "M-X", // Option+Shift+x
+	'Á': "M-Y", // Option+Shift+y
+	'¸': "M-Z", // Option+Shift+z
+
+	// Option+number
+	'¡': "M-1", // Option+1
+	'™': "M-2", // Option+2
+	'£': "M-3", // Option+3
+	'¢': "M-4", // Option+4
+	'∞': "M-5", // Option+5
+	'§': "M-6", // Option+6
+	'¶': "M-7", // Option+7
+	'•': "M-8", // Option+8
+	'ª': "M-9", // Option+9
+	'º': "M-0", // Option+0
+
+	// Option+symbol
+	'–': "M--",  // Option+minus (en dash)
+	'≠': "M-=",  // Option+equals
+	'"': "M-[",  // Option+[ (left double quote)
+	'\u2019': "M-]",  // Option+] (right single quote)
+	'«': "M-\\", // Option+backslash
+	'…': "M-;",  // Option+semicolon
+	'æ': "M-'",  // Option+quote
+	'≤': "M-,",  // Option+comma
+	'≥': "M-.",  // Option+period
+	'÷': "M-/",  // Option+slash
+	'`': "M-`",  // Option+backtick (same as backtick on some layouts)
 }
 
 // readLoop continuously reads raw bytes from input
@@ -483,7 +583,10 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 
 		// Try dynamic parsing for CSI sequences with modifiers
 		if key, ok := h.parseModifiedCSI(seq); ok {
-			h.emitKey(key)
+			// Mouse events return "" but emit keys internally
+			if key != "" {
+				h.emitKey(key)
+			}
 			h.escBuffer = nil
 			h.inEscape = false
 			escTimeout.Stop()
@@ -579,9 +682,45 @@ func (h *Handler) couldBeEscapePrefix(seq string) bool {
 			return true
 		}
 	}
+
+	// macOS Option+key sends ESC ESC [ X - wait for the full sequence
+	if len(seq) >= 2 && seq[0] == 0x1b && seq[1] == 0x1b {
+		// ESC ESC - could be start of macOS Option+arrow
+		if len(seq) == 2 {
+			return true // Wait for more
+		}
+		// ESC ESC [ - wait for arrow key
+		if len(seq) >= 3 && seq[2] == '[' {
+			last := seq[len(seq)-1]
+			if last >= 0x40 && last <= 0x7e {
+				return false // Terminated
+			}
+			return true // Still in progress
+		}
+	}
+
 	// Also allow CSI sequences in progress: ESC [ ...
 	if len(seq) >= 2 && seq[0] == 0x1b && seq[1] == '[' {
-		// CSI sequence - wait for terminator
+		body := seq[2:]
+
+		// SGR mouse: ESC [ < ... M/m - wait for M or m terminator
+		if len(body) >= 1 && body[0] == '<' {
+			last := body[len(body)-1]
+			if last == 'M' || last == 'm' {
+				return false // Terminated
+			}
+			return true // Still waiting for M/m
+		}
+
+		// X10 mouse: ESC [ M Cb Cx Cy - need exactly 3 bytes after M
+		if len(body) >= 1 && body[0] == 'M' {
+			if len(body) < 4 {
+				return true // Need more bytes
+			}
+			return false // Got all 4 bytes (M + 3 data bytes)
+		}
+
+		// Regular CSI sequence - wait for terminator
 		last := seq[len(seq)-1]
 		if last >= 0x40 && last <= 0x7e {
 			return false // Terminated
@@ -611,6 +750,20 @@ func (h *Handler) emitEscapeBuffer() {
 
 // emitKey sends a key event to either the Keys channel or line assembly
 func (h *Handler) emitKey(key string) {
+	// Decode macOS Option characters if enabled
+	h.mu.Lock()
+	decodeMacOS := h.decodeMacOSOption
+	h.mu.Unlock()
+
+	if decodeMacOS && len(key) > 0 {
+		r, size := utf8.DecodeRuneInString(key)
+		if size == len(key) && r != utf8.RuneError {
+			if decoded, ok := macOSOptionChars[r]; ok {
+				key = decoded
+			}
+		}
+	}
+
 	h.debug(fmt.Sprintf("Key: %q", key))
 
 	// Call callback if set
@@ -971,7 +1124,26 @@ func (h *Handler) parseAltSequence(seq string) (string, bool) {
 }
 
 // parseModifiedCSI dynamically parses CSI sequences with modifiers
+// Returns single key, or for mouse events returns "" and handles emission internally
 func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
+	// Check for macOS Option+arrow: ESC ESC [ X
+	if len(seq) == 4 && seq[0] == 0x1b && seq[1] == 0x1b && seq[2] == '[' {
+		switch seq[3] {
+		case 'A':
+			return "M-Up", true
+		case 'B':
+			return "M-Down", true
+		case 'C':
+			return "M-Right", true
+		case 'D':
+			return "M-Left", true
+		case 'H':
+			return "M-Home", true
+		case 'F':
+			return "M-End", true
+		}
+	}
+
 	// Must start with ESC [
 	if len(seq) < 3 || seq[0] != 0x1b || seq[1] != '[' {
 		return "", false
@@ -980,6 +1152,29 @@ func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
 	body := seq[2:]
 	if len(body) == 0 {
 		return "", false
+	}
+
+	// Check for SGR mouse: ESC [ < ... M/m
+	if len(body) >= 4 && body[0] == '<' {
+		finalByte := body[len(body)-1]
+		if finalByte == 'M' || finalByte == 'm' {
+			if posKey, actionKey, ok := parseMouseSGR(seq); ok {
+				// Emit both keys: position first, then action
+				h.emitKey(posKey)
+				h.emitKey(actionKey)
+				return "", true // Signal success but no additional key to emit
+			}
+		}
+	}
+
+	// Check for X10 mouse: ESC [ M Cb Cx Cy (exactly 3 bytes after M)
+	if len(body) == 4 && body[0] == 'M' {
+		if posKey, actionKey, ok := parseMouseX10(seq); ok {
+			// Emit both keys: position first, then action
+			h.emitKey(posKey)
+			h.emitKey(actionKey)
+			return "", true // Signal success but no additional key to emit
+		}
 	}
 
 	// Check for Shift+Tab: ESC [ Z
@@ -1395,4 +1590,128 @@ func formatNumberKey(number byte, mod int) string {
 	}
 
 	return prefix + keyPart
+}
+
+// parseMouseSGR parses SGR mouse sequences: ESC [ < Cb ; Cx ; Cy M/m
+// Returns position key, action key, and success flag
+func parseMouseSGR(seq string) (string, string, bool) {
+	// Must start with ESC [ <
+	if len(seq) < 6 || seq[0] != 0x1b || seq[1] != '[' || seq[2] != '<' {
+		return "", "", false
+	}
+
+	// Final byte must be M (press) or m (release)
+	finalByte := seq[len(seq)-1]
+	if finalByte != 'M' && finalByte != 'm' {
+		return "", "", false
+	}
+	isRelease := finalByte == 'm'
+
+	// Parse parameters: Cb;Cx;Cy
+	params := seq[3 : len(seq)-1]
+	parts := splitCSIParams(params)
+	if len(parts) != 3 {
+		return "", "", false
+	}
+
+	cb := parseModifierParam(parts[0])
+	cx := parseModifierParam(parts[1])
+	cy := parseModifierParam(parts[2])
+
+	return formatMouseEvent(cb, cx, cy, isRelease)
+}
+
+// parseMouseX10 parses X10 mouse sequences: ESC [ M Cb Cx Cy
+// Returns position key, action key, and success flag
+func parseMouseX10(seq string) (string, string, bool) {
+	// Must be exactly ESC [ M followed by 3 bytes
+	if len(seq) != 6 || seq[0] != 0x1b || seq[1] != '[' || seq[2] != 'M' {
+		return "", "", false
+	}
+
+	// Decode button and coordinates (all have 32 added)
+	cb := int(seq[3]) - 32
+	cx := int(seq[4]) - 32
+	cy := int(seq[5]) - 32
+
+	// X10 protocol: button code 3 means release
+	isRelease := (cb & 3) == 3
+
+	return formatMouseEvent(cb, cx, cy, isRelease)
+}
+
+// formatMouseEvent formats mouse event into position and action keys
+func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
+	// Position key
+	posKey := fmt.Sprintf("Mouse@%d,%d", cx, cy)
+
+	// Decode modifiers from button code
+	hasShift := (cb & 4) != 0
+	hasAlt := (cb & 8) != 0
+	hasCtrl := (cb & 16) != 0
+
+	// Build modifier prefix
+	prefix := ""
+	if hasShift {
+		prefix += "S-"
+	}
+	if hasAlt {
+		prefix += "M-"
+	}
+	if hasCtrl {
+		prefix += "C-"
+	}
+
+	// Decode button and action
+	var action string
+	buttonBits := cb & 3
+	isMotion := (cb & 32) != 0
+	isScroll := (cb & 64) != 0
+
+	if isScroll {
+		// Scroll wheel
+		if buttonBits == 0 {
+			action = "MouseScrollUp"
+		} else {
+			action = "MouseScrollDown"
+		}
+	} else if isMotion {
+		// Mouse drag
+		switch buttonBits {
+		case 0:
+			action = "MouseLeftDrag"
+		case 1:
+			action = "MouseMiddleDrag"
+		case 2:
+			action = "MouseRightDrag"
+		default:
+			action = "MouseDrag"
+		}
+	} else if isRelease {
+		// Button release
+		switch buttonBits {
+		case 0:
+			action = "MouseLeftRelease"
+		case 1:
+			action = "MouseMiddleRelease"
+		case 2:
+			action = "MouseRightRelease"
+		default:
+			action = "MouseRelease"
+		}
+	} else {
+		// Button press
+		switch buttonBits {
+		case 0:
+			action = "MouseLeftPress"
+		case 1:
+			action = "MouseMiddlePress"
+		case 2:
+			action = "MouseRightPress"
+		default:
+			action = "MousePress"
+		}
+	}
+
+	return posKey, prefix + action, true
 }

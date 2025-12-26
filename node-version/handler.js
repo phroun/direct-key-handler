@@ -164,6 +164,81 @@ const PASTE_END_BUFFER_SIZE = 7;
 // Default size for paste chunks (1KB)
 const DEFAULT_PASTE_CHUNK_SIZE = 1024;
 
+// macOS Option+key character mappings (US keyboard layout)
+const macOSOptionChars = {
+    // Lowercase Option+letter
+    'å': 'M-a', // Option+a
+    '∫': 'M-b', // Option+b
+    'ç': 'M-c', // Option+c
+    '∂': 'M-d', // Option+d
+    'ƒ': 'M-f', // Option+f
+    '©': 'M-g', // Option+g
+    '˙': 'M-h', // Option+h
+    '∆': 'M-j', // Option+j
+    '˚': 'M-k', // Option+k
+    '¬': 'M-l', // Option+l
+    'µ': 'M-m', // Option+m
+    'ø': 'M-o', // Option+o
+    'π': 'M-p', // Option+p
+    'œ': 'M-q', // Option+q
+    '®': 'M-r', // Option+r
+    'ß': 'M-s', // Option+s
+    '†': 'M-t', // Option+t
+    '√': 'M-v', // Option+v
+    '∑': 'M-w', // Option+w
+    '≈': 'M-x', // Option+x
+    '¥': 'M-y', // Option+y
+    'Ω': 'M-z', // Option+z
+
+    // Uppercase Option+Shift+letter (use M-X for uppercase, not M-S-x)
+    'Å': 'M-A', // Option+Shift+a
+    'ı': 'M-B', // Option+Shift+b
+    'Ç': 'M-C', // Option+Shift+c
+    'Î': 'M-D', // Option+Shift+d
+    'Ï': 'M-F', // Option+Shift+f
+    '˝': 'M-G', // Option+Shift+g
+    'Ó': 'M-H', // Option+Shift+h
+    'Ô': 'M-J', // Option+Shift+j
+    '\uF8FF': 'M-K', // Option+Shift+k (Apple logo)
+    'Ò': 'M-L', // Option+Shift+l
+    'Â': 'M-M', // Option+Shift+m
+    'Ø': 'M-O', // Option+Shift+o
+    '∏': 'M-P', // Option+Shift+p
+    'Œ': 'M-Q', // Option+Shift+q
+    '‰': 'M-R', // Option+Shift+r
+    'Í': 'M-S', // Option+Shift+s
+    'ˇ': 'M-T', // Option+Shift+t
+    '◊': 'M-V', // Option+Shift+v
+    '„': 'M-W', // Option+Shift+w
+    '˛': 'M-X', // Option+Shift+x
+    'Á': 'M-Y', // Option+Shift+y
+    '¸': 'M-Z', // Option+Shift+z
+
+    // Option+number
+    '¡': 'M-1', // Option+1
+    '™': 'M-2', // Option+2
+    '£': 'M-3', // Option+3
+    '¢': 'M-4', // Option+4
+    '∞': 'M-5', // Option+5
+    '§': 'M-6', // Option+6
+    '¶': 'M-7', // Option+7
+    '•': 'M-8', // Option+8
+    'ª': 'M-9', // Option+9
+    'º': 'M-0', // Option+0
+
+    // Option+symbol
+    '–': 'M--',  // Option+minus (en dash)
+    '≠': 'M-=',  // Option+equals
+    '"': 'M-[',  // Option+[ (left double quote)
+    ''': 'M-]',  // Option+] (right single quote)
+    '«': 'M-\\', // Option+backslash
+    '…': 'M-;',  // Option+semicolon
+    'æ': "M-'",  // Option+quote
+    '≤': 'M-,',  // Option+comma
+    '≥': 'M-.',  // Option+period
+    '÷': 'M-/',  // Option+slash
+};
+
 /**
  * DirectKeyboardHandler - handles raw keyboard input with escape sequence parsing
  */
@@ -174,6 +249,7 @@ class DirectKeyboardHandler extends EventEmitter {
      * @param {stream.Readable} options.inputStream - Input stream (default: process.stdin)
      * @param {stream.Writable} options.outputStream - Output stream for echo (default: null)
      * @param {number} options.pasteChunkSize - Size of chunks emitted during paste (default: 1024)
+     * @param {boolean} options.decodeMacOSOption - Decode macOS Option+key chars to M-key (default: false)
      * @param {Function} options.debugFn - Debug callback (optional)
      */
     constructor(options = {}) {
@@ -182,6 +258,7 @@ class DirectKeyboardHandler extends EventEmitter {
         this.inputStream = options.inputStream || process.stdin;
         this.outputStream = options.outputStream || null;
         this.pasteChunkSize = options.pasteChunkSize || DEFAULT_PASTE_CHUNK_SIZE;
+        this.decodeMacOSOption = options.decodeMacOSOption || false;
         this.debugFn = options.debugFn || null;
         
         // State
@@ -322,7 +399,17 @@ class DirectKeyboardHandler extends EventEmitter {
     setEchoWriter(stream) {
         this.outputStream = stream;
     }
-    
+
+    /**
+     * Enable or disable macOS Option+key character decoding
+     * When enabled, Unicode characters produced by Option+key combinations
+     * on macOS (e.g., ∂) will be decoded to their M-key equivalents (e.g., M-d)
+     * @param {boolean} enabled - Enable decoding
+     */
+    setDecodeMacOSOption(enabled) {
+        this.decodeMacOSOption = enabled;
+    }
+
     /**
      * Set callback for key events
      * @param {Function} callback - Called with each key
@@ -480,7 +567,10 @@ class DirectKeyboardHandler extends EventEmitter {
             // Try dynamic parsing for CSI sequences with modifiers
             const csiResult = this._parseModifiedCSI(this.escBuffer);
             if (csiResult) {
-                this._emitKey(csiResult);
+                // Mouse events return {mouse: true} and emit keys internally
+                if (typeof csiResult === 'string') {
+                    this._emitKey(csiResult);
+                }
                 this.escBuffer = '';
                 this.inEscape = false;
                 this._clearEscTimeout();
@@ -579,8 +669,45 @@ class DirectKeyboardHandler extends EventEmitter {
                 return true;
             }
         }
+
+        // macOS Option+key sends ESC ESC [ X - wait for the full sequence
+        if (seq.length >= 2 && seq[0] === '\x1b' && seq[1] === '\x1b') {
+            // ESC ESC - could be start of macOS Option+arrow
+            if (seq.length === 2) {
+                return true; // Wait for more
+            }
+            // ESC ESC [ - wait for arrow key
+            if (seq.length >= 3 && seq[2] === '[') {
+                const last = seq.charCodeAt(seq.length - 1);
+                if (last >= 0x40 && last <= 0x7e) {
+                    return false; // Terminated
+                }
+                return true; // Still in progress
+            }
+        }
+
         // Also allow CSI sequences in progress: ESC [ ...
         if (seq.length >= 2 && seq[0] === '\x1b' && seq[1] === '[') {
+            const body = seq.slice(2);
+
+            // SGR mouse: ESC [ < ... M/m - wait for M or m terminator
+            if (body.length >= 1 && body[0] === '<') {
+                const last = body[body.length - 1];
+                if (last === 'M' || last === 'm') {
+                    return false; // Terminated
+                }
+                return true; // Still waiting for M/m
+            }
+
+            // X10 mouse: ESC [ M Cb Cx Cy - need exactly 3 bytes after M
+            if (body.length >= 1 && body[0] === 'M') {
+                if (body.length < 4) {
+                    return true; // Need more bytes
+                }
+                return false; // Got all 4 bytes (M + 3 data bytes)
+            }
+
+            // Regular CSI sequence - wait for terminator
             const last = seq.charCodeAt(seq.length - 1);
             if (last >= 0x40 && last <= 0x7e) {
                 return false; // Terminated
@@ -650,8 +777,16 @@ class DirectKeyboardHandler extends EventEmitter {
      * @private
      */
     _emitKey(key) {
+        // Check for macOS Option character decoding
+        if (this.decodeMacOSOption && key.length === 1) {
+            const decoded = macOSOptionChars[key];
+            if (decoded) {
+                key = decoded;
+            }
+        }
+
         this._debug(`Key: "${key}"`);
-        
+
         // Call callback if set
         if (this.onKeyCallback) {
             this.onKeyCallback(key);
@@ -910,33 +1045,69 @@ class DirectKeyboardHandler extends EventEmitter {
     /**
      * Parse modified CSI sequences
      * @private
+     * @returns {string|{mouse: true}|null} Key string, mouse marker, or null
      */
     _parseModifiedCSI(seq) {
+        // Check for macOS Option+arrow: ESC ESC [ X
+        if (seq.length === 4 && seq[0] === '\x1b' && seq[1] === '\x1b' && seq[2] === '[') {
+            const arrowKeys = { 'A': 'M-Up', 'B': 'M-Down', 'C': 'M-Right', 'D': 'M-Left' };
+            const navKeys = { 'H': 'M-Home', 'F': 'M-End' };
+            const key = arrowKeys[seq[3]] || navKeys[seq[3]];
+            if (key) {
+                return key;
+            }
+        }
+
         // Must start with ESC [
         if (seq.length < 3 || seq[0] !== '\x1b' || seq[1] !== '[') {
             return null;
         }
-        
+
         const body = seq.slice(2);
         if (body.length === 0) {
             return null;
         }
-        
+
+        // Check for SGR mouse: ESC [ < ... M/m
+        if (body.length >= 4 && body[0] === '<') {
+            const finalByte = body[body.length - 1];
+            if (finalByte === 'M' || finalByte === 'm') {
+                const result = this._parseMouseSGR(seq);
+                if (result) {
+                    // Emit both keys: position first, then action
+                    this._emitKey(result.posKey);
+                    this._emitKey(result.actionKey);
+                    return { mouse: true }; // Signal success but no additional key
+                }
+            }
+        }
+
+        // Check for X10 mouse: ESC [ M Cb Cx Cy (exactly 3 bytes after M)
+        if (body.length === 4 && body[0] === 'M') {
+            const result = this._parseMouseX10(seq);
+            if (result) {
+                // Emit both keys: position first, then action
+                this._emitKey(result.posKey);
+                this._emitKey(result.actionKey);
+                return { mouse: true }; // Signal success but no additional key
+            }
+        }
+
         // Check for Shift+Tab: ESC [ Z
         if (body === 'Z') {
             return 'S-Tab';
         }
-        
+
         // Final byte determines the key type
         const finalByte = body.charCodeAt(body.length - 1);
         if (finalByte < 0x40 || finalByte > 0x7E) {
             return null;
         }
-        
+
         const params = body.slice(0, -1);
         const parts = params ? params.split(';') : [];
         const finalChar = body[body.length - 1];
-        
+
         switch (finalChar) {
             case 'A': case 'B': case 'C': case 'D':
                 return this._parseModifiedCursorKey(finalChar, parts);
@@ -949,7 +1120,7 @@ class DirectKeyboardHandler extends EventEmitter {
             case 'u':
                 return this._parseKittyProtocol(parts);
         }
-        
+
         return null;
     }
     
@@ -1201,8 +1372,119 @@ class DirectKeyboardHandler extends EventEmitter {
         let prefix = '';
         if (hasSuper) prefix += 's-';
         if (hasAlt) prefix += 'M-';
-        
+
         return prefix + keyPart;
+    }
+
+    /**
+     * Parse SGR mouse sequence: ESC [ < Cb ; Cx ; Cy M/m
+     * @private
+     * @returns {Object|null} {posKey, actionKey} or null if not a mouse sequence
+     */
+    _parseMouseSGR(seq) {
+        // Must start with ESC [ <
+        if (seq.length < 6 || seq[0] !== '\x1b' || seq[1] !== '[' || seq[2] !== '<') {
+            return null;
+        }
+
+        // Final byte must be M (press) or m (release)
+        const finalByte = seq[seq.length - 1];
+        if (finalByte !== 'M' && finalByte !== 'm') {
+            return null;
+        }
+        const isRelease = finalByte === 'm';
+
+        // Parse parameters: Cb;Cx;Cy
+        const params = seq.slice(3, -1);
+        const parts = params.split(';');
+        if (parts.length !== 3) {
+            return null;
+        }
+
+        const cb = parseInt(parts[0], 10) || 0;
+        const cx = parseInt(parts[1], 10) || 0;
+        const cy = parseInt(parts[2], 10) || 0;
+
+        return this._formatMouseEvent(cb, cx, cy, isRelease);
+    }
+
+    /**
+     * Parse X10 mouse sequence: ESC [ M Cb Cx Cy
+     * @private
+     * @returns {Object|null} {posKey, actionKey} or null if not a mouse sequence
+     */
+    _parseMouseX10(seq) {
+        // Must be exactly ESC [ M followed by 3 bytes
+        if (seq.length !== 6 || seq[0] !== '\x1b' || seq[1] !== '[' || seq[2] !== 'M') {
+            return null;
+        }
+
+        // Decode button and coordinates (all have 32 added)
+        const cb = seq.charCodeAt(3) - 32;
+        const cx = seq.charCodeAt(4) - 32;
+        const cy = seq.charCodeAt(5) - 32;
+
+        // X10 protocol: button code 3 means release
+        const isRelease = (cb & 3) === 3;
+
+        return this._formatMouseEvent(cb, cx, cy, isRelease);
+    }
+
+    /**
+     * Format mouse event into position and action keys
+     * @private
+     */
+    _formatMouseEvent(cb, cx, cy, isRelease) {
+        // Position key
+        const posKey = `Mouse@${cx},${cy}`;
+
+        // Decode modifiers from button code
+        const hasShift = (cb & 4) !== 0;
+        const hasAlt = (cb & 8) !== 0;
+        const hasCtrl = (cb & 16) !== 0;
+
+        // Build modifier prefix
+        let prefix = '';
+        if (hasShift) prefix += 'S-';
+        if (hasAlt) prefix += 'M-';
+        if (hasCtrl) prefix += 'C-';
+
+        // Decode button and action
+        let action;
+        const buttonBits = cb & 3;
+        const isMotion = (cb & 32) !== 0;
+        const isScroll = (cb & 64) !== 0;
+
+        if (isScroll) {
+            // Scroll wheel
+            action = buttonBits === 0 ? 'MouseScrollUp' : 'MouseScrollDown';
+        } else if (isMotion) {
+            // Mouse drag
+            switch (buttonBits) {
+                case 0: action = 'MouseLeftDrag'; break;
+                case 1: action = 'MouseMiddleDrag'; break;
+                case 2: action = 'MouseRightDrag'; break;
+                default: action = 'MouseDrag';
+            }
+        } else if (isRelease) {
+            // Button release
+            switch (buttonBits) {
+                case 0: action = 'MouseLeftRelease'; break;
+                case 1: action = 'MouseMiddleRelease'; break;
+                case 2: action = 'MouseRightRelease'; break;
+                default: action = 'MouseRelease';
+            }
+        } else {
+            // Button press
+            switch (buttonBits) {
+                case 0: action = 'MouseLeftPress'; break;
+                case 1: action = 'MouseMiddlePress'; break;
+                case 2: action = 'MouseRightPress'; break;
+                default: action = 'MousePress';
+            }
+        }
+
+        return { posKey, actionKey: prefix + action };
     }
 }
 
