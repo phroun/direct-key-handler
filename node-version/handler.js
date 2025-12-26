@@ -151,6 +151,62 @@ const kittySpecialKeys = {
     27: 'Escape',
     32: 'Space',
     127: 'Backspace',
+    // Functional keys (Kitty extended codes)
+    57358: 'CapsLock',
+    57359: 'ScrollLock',
+    57360: 'NumLock',
+    57361: 'PrintScreen',
+    57362: 'Pause',
+    57363: 'Menu',
+    // F1-F12
+    57364: 'F1',
+    57365: 'F2',
+    57366: 'F3',
+    57367: 'F4',
+    57368: 'F5',
+    57369: 'F6',
+    57370: 'F7',
+    57371: 'F8',
+    57372: 'F9',
+    57373: 'F10',
+    57374: 'F11',
+    57375: 'F12',
+    // F13-F35
+    57376: 'F13',
+    57377: 'F14',
+    57378: 'F15',
+    57379: 'F16',
+    57380: 'F17',
+    57381: 'F18',
+    57382: 'F19',
+    57383: 'F20',
+    // Navigation
+    57417: 'Up',
+    57418: 'Down',
+    57419: 'Left',
+    57420: 'Right',
+    57421: 'PageUp',
+    57422: 'PageDown',
+    57423: 'Home',
+    57424: 'End',
+    57425: 'Insert',
+    57426: 'Delete',
+};
+
+// Kitty protocol modifier keys (for press/release events)
+const kittyModifierKeys = {
+    57441: 'Shift',      // Left Shift
+    57442: 'Shift',      // Right Shift
+    57443: 'Ctrl',       // Left Control
+    57444: 'Ctrl',       // Right Control
+    57445: 'Alt',        // Left Alt
+    57446: 'Alt',        // Right Alt
+    57447: 'Super',      // Left Super
+    57448: 'Super',      // Right Super
+    57449: 'Hyper',      // Left Hyper
+    57450: 'Hyper',      // Right Hyper
+    57451: 'Meta',       // Left Meta
+    57452: 'Meta',       // Right Meta
 };
 
 // Bracketed paste sequences
@@ -1222,39 +1278,102 @@ class DirectKeyboardHandler extends EventEmitter {
     
     /**
      * Parse Kitty keyboard protocol
+     * Format: keycode ; modifiers : event_type u
+     * Event types: 1=press, 2=repeat, 3=release
      * @private
      */
     _parseKittyProtocol(parts) {
         if (parts.length === 0) return null;
-        
+
         const keycode = this._parseModifierParam(parts[0]);
-        const mod = parts.length >= 2 ? this._parseModifierParam(parts[1]) : 1;
-        
+
+        // Parse modifiers and event type from second part
+        // Format can be: "modifiers" or "modifiers:event_type"
+        let mod = 1;
+        let eventType = 1; // 1=press (default), 2=repeat, 3=release
+
+        if (parts.length >= 2) {
+            const modPart = parts[1];
+            if (modPart.includes(':')) {
+                const [modStr, eventStr] = modPart.split(':');
+                mod = this._parseModifierParam(modStr);
+                eventType = parseInt(eventStr, 10) || 1;
+            } else {
+                mod = this._parseModifierParam(modPart);
+            }
+        }
+
+        // Check if this is a modifier key press/release
+        const modKeyName = kittyModifierKeys[keycode];
+        if (modKeyName) {
+            // Map modifier names to our prefix convention
+            let prefix = '';
+            switch (modKeyName) {
+                case 'Shift': prefix = 'S'; break;
+                case 'Ctrl': prefix = 'C'; break;
+                case 'Alt': prefix = 'Alt'; break;  // Use Alt instead of M to avoid confusion
+                case 'Super': prefix = 's'; break;
+                case 'Meta': prefix = 'M'; break;
+                case 'Hyper': prefix = 'H'; break;
+            }
+
+            // Event type suffix
+            let suffix = '';
+            switch (eventType) {
+                case 1: suffix = '-Press'; break;
+                case 2: suffix = '-Repeat'; break;
+                case 3: suffix = '-Release'; break;
+            }
+
+            return prefix + suffix;
+        }
+
+        // Build event suffix for non-modifier keys (only for release, press is default)
+        let eventSuffix = '';
+        if (eventType === 3) {
+            eventSuffix = ':Release';
+        } else if (eventType === 2) {
+            eventSuffix = ':Repeat';
+        }
+
         // Letter keys
         if (keycode >= 97 && keycode <= 122) { // a-z
-            return this._formatLetterKey(keycode, mod);
+            return this._formatLetterKey(keycode, mod) + eventSuffix;
         } else if (keycode >= 65 && keycode <= 90) { // A-Z
-            return this._formatLetterKey(keycode + 32, mod);
+            return this._formatLetterKey(keycode + 32, mod) + eventSuffix;
         }
-        
+
         // Symbol keys
         if (this._isSymbolKey(keycode)) {
-            return this._formatSymbolKey(keycode, mod);
+            return this._formatSymbolKey(keycode, mod) + eventSuffix;
         }
-        
+
         // Number keys
         if (this._isNumberKey(keycode)) {
-            return this._formatNumberKey(keycode, mod);
+            return this._formatNumberKey(keycode, mod) + eventSuffix;
         }
-        
-        // Special keys
-        const baseName = kittySpecialKeys[keycode];
-        if (!baseName) return null;
-        
-        if (mod <= 1) return baseName;
-        
+
+        // Special keys from kittySpecialKeys
+        let baseName = kittySpecialKeys[keycode];
+
+        // If not in our special keys map, treat as unicode codepoint
+        if (!baseName) {
+            // Check if it's a printable unicode character
+            if (keycode >= 32 && keycode < 0x110000) {
+                try {
+                    baseName = String.fromCodePoint(keycode);
+                } catch (e) {
+                    return null;
+                }
+            } else {
+                return null;
+            }
+        }
+
+        if (mod <= 1) return baseName + eventSuffix;
+
         const prefix = this._modifierPrefix(mod);
-        return prefix + baseName;
+        return prefix + baseName + eventSuffix;
     }
     
     /**

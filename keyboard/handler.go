@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -1418,7 +1420,73 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 	return "", false
 }
 
-// parseKittyProtocol handles CSI keycode ; mod u format
+// Kitty protocol special keys
+var kittySpecialKeys = map[int]string{
+	9:   "Tab",
+	13:  "Enter",
+	27:  "Escape",
+	32:  "Space",
+	127: "Backspace",
+	// Functional keys (Kitty extended codes)
+	57358: "CapsLock",
+	57359: "ScrollLock",
+	57360: "NumLock",
+	57361: "PrintScreen",
+	57362: "Pause",
+	57363: "Menu",
+	// F1-F12
+	57364: "F1",
+	57365: "F2",
+	57366: "F3",
+	57367: "F4",
+	57368: "F5",
+	57369: "F6",
+	57370: "F7",
+	57371: "F8",
+	57372: "F9",
+	57373: "F10",
+	57374: "F11",
+	57375: "F12",
+	// F13-F20
+	57376: "F13",
+	57377: "F14",
+	57378: "F15",
+	57379: "F16",
+	57380: "F17",
+	57381: "F18",
+	57382: "F19",
+	57383: "F20",
+	// Navigation
+	57417: "Up",
+	57418: "Down",
+	57419: "Left",
+	57420: "Right",
+	57421: "PageUp",
+	57422: "PageDown",
+	57423: "Home",
+	57424: "End",
+	57425: "Insert",
+	57426: "Delete",
+}
+
+// Kitty protocol modifier keys (for press/release events)
+var kittyModifierKeys = map[int]string{
+	57441: "Shift",  // Left Shift
+	57442: "Shift",  // Right Shift
+	57443: "Ctrl",   // Left Control
+	57444: "Ctrl",   // Right Control
+	57445: "Alt",    // Left Alt
+	57446: "Alt",    // Right Alt
+	57447: "Super",  // Left Super
+	57448: "Super",  // Right Super
+	57449: "Hyper",  // Left Hyper
+	57450: "Hyper",  // Right Hyper
+	57451: "Meta",   // Left Meta
+	57452: "Meta",   // Right Meta
+}
+
+// parseKittyProtocol handles CSI keycode ; modifiers : event_type u format
+// Event types: 1=press, 2=repeat, 3=release
 func parseKittyProtocol(parts []string) (string, bool) {
 	if len(parts) == 0 {
 		return "", false
@@ -1426,48 +1494,100 @@ func parseKittyProtocol(parts []string) (string, bool) {
 
 	keycode := parseModifierParam(parts[0])
 
+	// Parse modifiers and event type from second part
+	// Format can be: "modifiers" or "modifiers:event_type"
 	mod := 1
+	eventType := 1 // 1=press (default), 2=repeat, 3=release
+
 	if len(parts) >= 2 {
-		mod = parseModifierParam(parts[1])
+		modPart := parts[1]
+		if idx := strings.Index(modPart, ":"); idx >= 0 {
+			mod = parseModifierParam(modPart[:idx])
+			if et, err := strconv.Atoi(modPart[idx+1:]); err == nil {
+				eventType = et
+			}
+		} else {
+			mod = parseModifierParam(modPart)
+		}
 	}
 
-	keyNames := map[int]string{
-		9:   "Tab",
-		13:  "Enter",
-		27:  "Escape",
-		32:  "Space",
-		127: "Backspace",
+	// Check if this is a modifier key press/release
+	if modKeyName, ok := kittyModifierKeys[keycode]; ok {
+		// Map modifier names to our prefix convention
+		var prefix string
+		switch modKeyName {
+		case "Shift":
+			prefix = "S"
+		case "Ctrl":
+			prefix = "C"
+		case "Alt":
+			prefix = "Alt" // Use Alt instead of M to avoid confusion
+		case "Super":
+			prefix = "s"
+		case "Meta":
+			prefix = "M"
+		case "Hyper":
+			prefix = "H"
+		}
+
+		// Event type suffix
+		var suffix string
+		switch eventType {
+		case 1:
+			suffix = "-Press"
+		case 2:
+			suffix = "-Repeat"
+		case 3:
+			suffix = "-Release"
+		}
+
+		return prefix + suffix, true
+	}
+
+	// Build event suffix for non-modifier keys (only for release, press is default)
+	eventSuffix := ""
+	if eventType == 3 {
+		eventSuffix = ":Release"
+	} else if eventType == 2 {
+		eventSuffix = ":Repeat"
 	}
 
 	// Letter keys
 	if keycode >= 'a' && keycode <= 'z' {
-		return formatLetterKey(byte(keycode), mod), true
+		return formatLetterKey(byte(keycode), mod) + eventSuffix, true
 	} else if keycode >= 'A' && keycode <= 'Z' {
-		return formatLetterKey(byte(keycode+32), mod), true
+		return formatLetterKey(byte(keycode+32), mod) + eventSuffix, true
 	}
 
 	// Symbol keys
 	if isSymbolKey(keycode) {
-		return formatSymbolKey(byte(keycode), mod), true
+		return formatSymbolKey(byte(keycode), mod) + eventSuffix, true
 	}
 
 	// Number keys
 	if isNumberKey(keycode) {
-		return formatNumberKey(byte(keycode), mod), true
+		return formatNumberKey(byte(keycode), mod) + eventSuffix, true
 	}
 
-	// Special keys
-	baseName, ok := keyNames[keycode]
+	// Special keys from kittySpecialKeys
+	baseName, ok := kittySpecialKeys[keycode]
+
+	// If not in our special keys map, treat as unicode codepoint
 	if !ok {
-		return "", false
+		// Check if it's a printable unicode character
+		if keycode >= 32 && keycode < 0x110000 {
+			baseName = string(rune(keycode))
+		} else {
+			return "", false
+		}
 	}
 
 	if mod <= 1 {
-		return baseName, true
+		return baseName + eventSuffix, true
 	}
 
 	prefix := modifierPrefix(mod)
-	return prefix + baseName, true
+	return prefix + baseName + eventSuffix, true
 }
 
 // formatLetterKey formats a letter key with modifiers
