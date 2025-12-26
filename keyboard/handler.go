@@ -1146,20 +1146,27 @@ func (h *Handler) parseAltSequence(seq string) (string, bool) {
 // Returns single key, or for mouse events returns "" and handles emission internally
 func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
 	// Check for macOS Option+arrow: ESC ESC [ X
+	// Emit "Special" first to distinguish from xterm-style sequences
 	if len(seq) == 4 && seq[0] == 0x1b && seq[1] == 0x1b && seq[2] == '[' {
+		var key string
 		switch seq[3] {
 		case 'A':
-			return "M-Up", true
+			key = "M-Up"
 		case 'B':
-			return "M-Down", true
+			key = "M-Down"
 		case 'C':
-			return "M-Right", true
+			key = "M-Right"
 		case 'D':
-			return "M-Left", true
+			key = "M-Left"
 		case 'H':
-			return "M-Home", true
+			key = "M-Home"
 		case 'F':
-			return "M-End", true
+			key = "M-End"
+		}
+		if key != "" {
+			// Emit "Special" first, then return the key
+			h.emitKey("Special")
+			return key, true
 		}
 	}
 
@@ -1178,8 +1185,11 @@ func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
 		finalByte := body[len(body)-1]
 		if finalByte == 'M' || finalByte == 'm' {
 			if posKey, actionKey, ok := parseMouseSGR(seq); ok {
-				// Emit both keys: position first, then action
-				h.emitKey(posKey)
+				// For drag events, posKey is empty and position is in actionKey
+				// For other events, emit position first, then action
+				if posKey != "" {
+					h.emitKey(posKey)
+				}
 				h.emitKey(actionKey)
 				return "", true // Signal success but no additional key to emit
 			}
@@ -1189,8 +1199,11 @@ func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
 	// Check for X10 mouse: ESC [ M Cb Cx Cy (exactly 3 bytes after M)
 	if len(body) == 4 && body[0] == 'M' {
 		if posKey, actionKey, ok := parseMouseX10(seq); ok {
-			// Emit both keys: position first, then action
-			h.emitKey(posKey)
+			// For drag events, posKey is empty and position is in actionKey
+			// For other events, emit position first, then action
+			if posKey != "" {
+				h.emitKey(posKey)
+			}
 			h.emitKey(actionKey)
 			return "", true // Signal success but no additional key to emit
 		}
@@ -1659,11 +1672,10 @@ func parseMouseX10(seq string) (string, string, bool) {
 	return formatMouseEvent(cb, cx, cy, isRelease)
 }
 
-// formatMouseEvent formats mouse event into position and action keys
+// formatMouseEvent formats a mouse event into position and action keys
+// For drag events, position is embedded in action key (MouseLeftDrag@x,y)
+// For press/release/scroll, separate posKey and actionKey are returned
 func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
-	// Position key
-	posKey := fmt.Sprintf("Mouse@%d,%d", cx, cy)
-
 	// Decode modifiers from button code
 	hasShift := (cb & 4) != 0
 	hasAlt := (cb & 8) != 0
@@ -1695,7 +1707,7 @@ func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
 			action = "MouseScrollDown"
 		}
 	} else if isMotion {
-		// Mouse drag
+		// Mouse drag - include position in action key
 		switch buttonBits {
 		case 0:
 			action = "MouseLeftDrag"
@@ -1706,6 +1718,8 @@ func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
 		default:
 			action = "MouseDrag"
 		}
+		// For drag events, embed position in the action key and return empty posKey
+		return "", fmt.Sprintf("%s%s@%d,%d", prefix, action, cx, cy), true
 	} else if isRelease {
 		// Button release
 		switch buttonBits {
@@ -1732,5 +1746,7 @@ func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
 		}
 	}
 
+	// Position key for press/release/scroll
+	posKey := fmt.Sprintf("Mouse@%d,%d", cx, cy)
 	return posKey, prefix + action, true
 }

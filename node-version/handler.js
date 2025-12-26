@@ -1060,15 +1060,18 @@ class DirectKeyboardHandler extends EventEmitter {
     /**
      * Parse modified CSI sequences
      * @private
-     * @returns {string|{mouse: true}|null} Key string, mouse marker, or null
+     * @returns {string|{mouse: true}|{special: true, key: string}|null} Key string, mouse marker, special marker, or null
      */
     _parseModifiedCSI(seq) {
         // Check for macOS Option+arrow: ESC ESC [ X
+        // Emit "Special" first to distinguish from xterm-style sequences
         if (seq.length === 4 && seq[0] === '\x1b' && seq[1] === '\x1b' && seq[2] === '[') {
             const arrowKeys = { 'A': 'M-Up', 'B': 'M-Down', 'C': 'M-Right', 'D': 'M-Left' };
             const navKeys = { 'H': 'M-Home', 'F': 'M-End' };
             const key = arrowKeys[seq[3]] || navKeys[seq[3]];
             if (key) {
+                // Emit "Special" first, then return the key
+                this._emitKey('Special');
                 return key;
             }
         }
@@ -1089,8 +1092,11 @@ class DirectKeyboardHandler extends EventEmitter {
             if (finalByte === 'M' || finalByte === 'm') {
                 const result = this._parseMouseSGR(seq);
                 if (result) {
-                    // Emit both keys: position first, then action
-                    this._emitKey(result.posKey);
+                    // For drag events, posKey is null and position is in actionKey
+                    // For other events, emit position first, then action
+                    if (result.posKey) {
+                        this._emitKey(result.posKey);
+                    }
                     this._emitKey(result.actionKey);
                     return { mouse: true }; // Signal success but no additional key
                 }
@@ -1101,8 +1107,11 @@ class DirectKeyboardHandler extends EventEmitter {
         if (body.length === 4 && body[0] === 'M') {
             const result = this._parseMouseX10(seq);
             if (result) {
-                // Emit both keys: position first, then action
-                this._emitKey(result.posKey);
+                // For drag events, posKey is null and position is in actionKey
+                // For other events, emit position first, then action
+                if (result.posKey) {
+                    this._emitKey(result.posKey);
+                }
                 this._emitKey(result.actionKey);
                 return { mouse: true }; // Signal success but no additional key
             }
@@ -1448,11 +1457,10 @@ class DirectKeyboardHandler extends EventEmitter {
     /**
      * Format mouse event into position and action keys
      * @private
+     * For drag events, position is embedded in action key (MouseLeftDrag@x,y)
+     * For press/release/scroll, separate posKey and actionKey are returned
      */
     _formatMouseEvent(cb, cx, cy, isRelease) {
-        // Position key
-        const posKey = `Mouse@${cx},${cy}`;
-
         // Decode modifiers from button code
         const hasShift = (cb & 4) !== 0;
         const hasAlt = (cb & 8) !== 0;
@@ -1474,13 +1482,15 @@ class DirectKeyboardHandler extends EventEmitter {
             // Scroll wheel
             action = buttonBits === 0 ? 'MouseScrollUp' : 'MouseScrollDown';
         } else if (isMotion) {
-            // Mouse drag
+            // Mouse drag - include position in action key
             switch (buttonBits) {
                 case 0: action = 'MouseLeftDrag'; break;
                 case 1: action = 'MouseMiddleDrag'; break;
                 case 2: action = 'MouseRightDrag'; break;
                 default: action = 'MouseDrag';
             }
+            // For drag events, embed position in the action key and return single key
+            return { posKey: null, actionKey: `${prefix}${action}@${cx},${cy}` };
         } else if (isRelease) {
             // Button release
             switch (buttonBits) {
@@ -1499,6 +1509,8 @@ class DirectKeyboardHandler extends EventEmitter {
             }
         }
 
+        // Position key for press/release/scroll
+        const posKey = `Mouse@${cx},${cy}`;
         return { posKey, actionKey: prefix + action };
     }
 }
