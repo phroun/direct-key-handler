@@ -1285,6 +1285,7 @@ func modifierPrefix(mod int) string {
 }
 
 // parseModifierParam parses a modifier parameter string to int
+// Returns 1 for empty string or invalid input (xterm modifiers are 1-indexed)
 func parseModifierParam(s string) int {
 	if s == "" {
 		return 1
@@ -1301,6 +1302,23 @@ func parseModifierParam(s string) int {
 		return 1
 	}
 	return mod
+}
+
+// parseIntParam parses an integer parameter string where 0 is valid
+// Used for mouse button codes and coordinates where 0 is meaningful
+func parseIntParam(s string) int {
+	if s == "" {
+		return 0
+	}
+	val := 0
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			val = val*10 + int(c-'0')
+		} else {
+			return 0
+		}
+	}
+	return val
 }
 
 // parseModifiedCursorKey handles ESC [ 1 ; <mod> <A-D>
@@ -1822,9 +1840,9 @@ func parseMouseSGR(seq string) (string, string, bool) {
 		return "", "", false
 	}
 
-	cb := parseModifierParam(parts[0])
-	cx := parseModifierParam(parts[1])
-	cy := parseModifierParam(parts[2])
+	cb := parseIntParam(parts[0])
+	cx := parseIntParam(parts[1])
+	cy := parseIntParam(parts[2])
 
 	return formatMouseEvent(cb, cx, cy, isRelease)
 }
