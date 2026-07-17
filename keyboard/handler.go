@@ -458,7 +458,7 @@ var macOSOptionChars = map[rune]string{
 	// Option+symbol
 	'–': "M--",  // Option+minus (en dash)
 	'≠': "M-=",  // Option+equals
-	'"': "M-[",  // Option+[ (left double quote)
+	'“': "M-[", // Option+[ (left double quote, U+201C — the char Option actually emits; keying on ASCII '"' here would rewrite a plain double quote into a curly one)
 	'\u2019': "M-]",  // Option+] (right single quote)
 	'«': "M-\\", // Option+backslash
 	'…': "M-;",  // Option+semicolon
