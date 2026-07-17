@@ -73,6 +73,10 @@ type Handler struct {
 	// macOS Option key decoding
 	decodeMacOSOption bool // When true, decode macOS Option+key chars to M-key notation
 
+	// Paste key echo. When false, bracketed-paste content is delivered only via
+	// OnPaste/OnPasteChunk and is NOT also re-emitted as individual key events.
+	emitPasteKeys bool
+
 	// Echo output (where to echo typed characters)
 	echoWriter io.Writer
 
@@ -109,6 +113,14 @@ type Options struct {
 	// Only applies if InputReader is os.Stdin and is a terminal.
 	// Default: true
 	ManageTerminal *bool
+
+	// EmitPasteKeys controls whether bracketed-paste content is ALSO re-emitted
+	// as individual key events on the Keys channel. Consumers that handle paste
+	// through OnPaste or OnPasteChunk (e.g. to batch it into a single edit) do
+	// not want this echo: it duplicates the content and, on a large paste, can
+	// overflow the Keys channel and lose events. Default: true (backward
+	// compatible); set to false to deliver paste only via the callbacks.
+	EmitPasteKeys *bool
 }
 
 // New creates a new keyboard Handler.
@@ -137,6 +149,12 @@ func New(opts Options) *Handler {
 		decodeMacOSOption = *opts.DecodeMacOSOption
 	}
 
+	// Default to true (paste is echoed as keys) for backward compatibility.
+	emitPasteKeys := true
+	if opts.EmitPasteKeys != nil {
+		emitPasteKeys = *opts.EmitPasteKeys
+	}
+
 	h := &Handler{
 		inputReader:       opts.InputReader,
 		rawBytes:          make(chan []byte, 64),
@@ -148,6 +166,7 @@ func New(opts Options) *Handler {
 		terminalFd:        -1,
 		pasteChunkSize:    pasteChunkSize,
 		decodeMacOSOption: decodeMacOSOption,
+		emitPasteKeys:     emitPasteKeys,
 	}
 
 	// Check if input is a terminal file descriptor
@@ -839,8 +858,10 @@ func (h *Handler) emitPaste(content []byte) {
 	if inLineMode {
 		// In line read mode: add pasted content directly to line buffer
 		h.handlePasteLineAssembly(content)
-	} else {
-		// Normal mode: emit each character as individual key events
+	} else if h.emitPasteKeys {
+		// Normal mode: emit each character as individual key events. Consumers
+		// that take paste via OnPaste/OnPasteChunk opt out (EmitPasteKeys=false)
+		// so the content is not also delivered as a burst of keystrokes.
 		for len(content) > 0 {
 			r, size := utf8.DecodeRune(content)
 			if r == utf8.RuneError && size == 1 {
