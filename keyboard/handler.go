@@ -1255,7 +1255,16 @@ func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
 		return parseModifiedCursorKey(finalByte, parts)
 	case 'H', 'F':
 		return parseModifiedHomeEnd(finalByte, parts)
-	case 'P', 'Q', 'R', 'S':
+	case 'R':
+		// A two-parameter R whose first parameter is not 1 is a Cursor
+		// Position Report (DSR reply: ESC[row;colR), not modified F3 —
+		// the legacy F3-with-modifiers form is always "1;mod". Surface it
+		// as a distinct event so the application can consume it.
+		if len(parts) == 2 && parts[0] != "1" && parts[0] != "" {
+			return "CPR:" + parts[0] + ";" + parts[1], true
+		}
+		return parseModifiedF1toF4(finalByte, parts)
+	case 'P', 'Q', 'S':
 		return parseModifiedF1toF4(finalByte, parts)
 	case '~':
 		return parseModifiedTildeKey(parts)
