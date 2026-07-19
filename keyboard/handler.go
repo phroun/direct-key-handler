@@ -4,6 +4,7 @@
 package keyboard
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"runtime"
@@ -42,6 +43,15 @@ type Handler struct {
 	OnPaste      func(content []byte) // Called on bracketed paste content (complete)
 	OnPasteChunk func(chunk PasteChunk) // Called on incremental paste chunks
 
+	// OnClipboard is called with an OSC 52 clipboard *response*
+	// (ESC ] 52 ; <selection> ; <base64> BEL/ST) - the terminal's answer to a
+	// clipboard-read query. selection is the target byte ('c', 'p', ...) and
+	// data is the base64-decoded clipboard content. This is distinct from
+	// OnPaste (a user pasting into the terminal): a clipboard response is a
+	// fetch reply, so the caller consumes it rather than inserting it as typed
+	// text. It reuses the same buffering mechanism as bracketed paste.
+	OnClipboard func(selection byte, data []byte)
+
 	// Terminal handling (only used if input is os.Stdin and is a terminal)
 	terminalFd        int         // File descriptor if we're managing terminal mode
 	originalTermState *term.State // Original state to restore
@@ -69,6 +79,15 @@ type Handler struct {
 	pasteBuffer      []byte // Buffer for detecting end sequence (kept small for chunking)
 	fullPasteContent []byte // Accumulator for full paste content (for OnPaste callback)
 	pasteChunkSize   int    // Size of chunks to emit during paste (default: 1024)
+
+	// OSC 52 clipboard-response state - the same accumulate-into-a-buffer idea
+	// as bracketed paste, but with an OSC terminator (BEL or ST) and base64
+	// content, emitted on OnClipboard instead of OnPaste. Kept in its own small
+	// buffer (not fullPasteContent) so the well-tested paste path is untouched;
+	// the two are never in flight at the same time.
+	inClipboard     bool
+	clipboardBuffer []byte // accumulates "<selection>;<base64>"
+	clipboardEsc    bool   // last byte was ESC (a possible ST terminator start)
 
 	// macOS Option key decoding
 	decodeMacOSOption bool // When true, decode macOS Option+key chars to M-key notation
@@ -536,6 +555,10 @@ const (
 	bracketedPasteEnd   = "\x1b[201~"
 )
 
+// osc52Start introduces an OSC 52 clipboard response: ESC ] 52 ; . The body
+// (<selection>;<base64>) follows and is terminated by BEL (0x07) or ST (ESC \).
+const osc52Start = "\x1b]52;"
+
 // pasteEndBufferSize is the number of bytes to keep buffered during paste
 // to avoid splitting the end sequence (\x1b[201~ is 6 bytes, we buffer 7 to be safe)
 const pasteEndBufferSize = 7
@@ -545,6 +568,26 @@ const DefaultPasteChunkSize = 1024
 
 // processByte handles a single byte of input
 func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
+	// Handle an in-progress OSC 52 clipboard response: accumulate the body
+	// until a BEL (0x07) or ST (ESC \) terminator, then decode and emit it.
+	// base64 never contains ESC, so an ESC always ends the body.
+	if h.inClipboard {
+		if h.clipboardEsc {
+			h.clipboardEsc = false
+			h.finishClipboard() // ESC (\ for ST, or stray) ends the body
+			return
+		}
+		switch b {
+		case 0x07: // BEL terminator
+			h.finishClipboard()
+		case 0x1b: // ESC - possible ST terminator start
+			h.clipboardEsc = true
+		default:
+			h.clipboardBuffer = append(h.clipboardBuffer, b)
+		}
+		return
+	}
+
 	// Handle bracketed paste mode
 	if h.inPaste {
 		h.pasteBuffer = append(h.pasteBuffer, b)
@@ -598,6 +641,19 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			h.inPaste = true
 			h.pasteBuffer = nil
 			h.fullPasteContent = nil
+			escTimeout.Stop()
+			return
+		}
+
+		// Check for an OSC 52 clipboard-response start (ESC ] 52 ;). The body
+		// runs until BEL/ST and is gathered by the h.inClipboard branch above.
+		if seq == osc52Start {
+			h.debug("OSC 52 clipboard response start detected")
+			h.inEscape = false
+			h.escBuffer = nil
+			h.inClipboard = true
+			h.clipboardBuffer = nil
+			h.clipboardEsc = false
 			escTimeout.Stop()
 			return
 		}
@@ -713,6 +769,14 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 
 // couldBeEscapePrefix checks if seq could be a prefix of a valid escape sequence
 func (h *Handler) couldBeEscapePrefix(seq string) bool {
+	// A partial OSC 52 clipboard-response introducer (ESC ] 5 2 ;): keep
+	// buffering until the full osc52Start is seen (then processByte switches to
+	// clipboard mode). Without this, ESC ] would fall through and be emitted as
+	// stray keys.
+	if len(seq) < len(osc52Start) && osc52Start[:len(seq)] == seq {
+		return true
+	}
+
 	for key := range escBindings {
 		if len(seq) < len(key) && key[:len(seq)] == seq {
 			return true
@@ -841,6 +905,36 @@ func (h *Handler) emitKey(key string) {
 				// Still can't send, just drop this key
 			}
 		}
+	}
+}
+
+// finishClipboard ends an OSC 52 clipboard response: the accumulated body is
+// "<selection>;<base64>", so it splits off the selection, base64-decodes the
+// payload, and delivers it on OnClipboard. A malformed body is dropped. Unlike
+// a paste, the content is NOT emitted as keys - it is a fetch reply the caller
+// consumes.
+func (h *Handler) finishClipboard() {
+	body := h.clipboardBuffer
+	h.inClipboard = false
+	h.clipboardBuffer = nil
+	h.clipboardEsc = false
+
+	var sel byte
+	payload := body
+	if i := strings.IndexByte(string(body), ';'); i >= 0 {
+		if i > 0 {
+			sel = body[0] // first selection byte (c/p/...)
+		}
+		payload = body[i+1:]
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(payload)))
+	if err != nil {
+		h.debug(fmt.Sprintf("OSC 52 malformed base64, dropped (%d bytes)", len(payload)))
+		return
+	}
+	h.debug(fmt.Sprintf("OSC 52 clipboard response, %d bytes", len(data)))
+	if h.OnClipboard != nil {
+		h.OnClipboard(sel, data)
 	}
 }
 
