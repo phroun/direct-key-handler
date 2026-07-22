@@ -2018,11 +2018,17 @@ func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
 	isScroll := (cb & 64) != 0
 
 	if isScroll {
-		// Scroll wheel
-		if buttonBits == 0 {
+		// Scroll wheel. The low two bits select the wheel axis/direction:
+		// 0 = up, 1 = down, 2 = left, 3 = right (SGR buttons 64..67).
+		switch buttonBits {
+		case 0:
 			action = "MouseScrollUp"
-		} else {
+		case 1:
 			action = "MouseScrollDown"
+		case 2:
+			action = "MouseScrollLeft"
+		case 3:
+			action = "MouseScrollRight"
 		}
 	} else if isMotion {
 		// Mouse drag - include position in action key
