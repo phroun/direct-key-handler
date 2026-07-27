@@ -340,6 +340,19 @@ var escBindings = map[string]string{
 	"\x1bOQ": "F2",
 	"\x1bOR": "F3",
 	"\x1bOS": "F4",
+	// CSI-number forms of F1-F4: sent by terminals with the Kitty keyboard
+	// protocol enabled (disambiguate flag drops the ambiguous SS3 ESC O P
+	// encodings), and by legacy xterm-R6/rxvt/VT220-style terminals.
+	"\x1b[11~": "F1",
+	"\x1b[12~": "F2",
+	"\x1b[13~": "F3",
+	"\x1b[14~": "F4",
+	// Linux console F1-F5.
+	"\x1b[[A": "F1",
+	"\x1b[[B": "F2",
+	"\x1b[[C": "F3",
+	"\x1b[[D": "F4",
+	"\x1b[[E": "F5",
 	"\x1b[15~": "F5",
 	"\x1b[17~": "F6",
 	"\x1b[18~": "F7",
@@ -1533,6 +1546,10 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 		4:  "End",
 		5:  "PageUp",
 		6:  "PageDown",
+		11: "F1",
+		12: "F2",
+		13: "F3",
+		14: "F4",
 		15: "F5",
 		17: "F6",
 		18: "F7",
