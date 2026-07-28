@@ -641,6 +641,30 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 	}
 
 	if h.inEscape {
+		// ESC restarts. It is the one byte that can never appear inside a
+		// sequence, so a second one ends whatever is pending and begins anew:
+		// the unconditional "escape entry" transition every VT state machine
+		// has from every state.
+		//
+		// Without this, a lone Escape immediately followed by any sequence
+		// swallows both. The bytes accumulate as "\x1b\x1b[...", match no
+		// binding, are no valid prefix, fail parseModifiedCSI and the Alt
+		// parsers, and fall through to emitEscapeBuffer -- which types the
+		// SECOND sequence's body out as literal characters. With mouse
+		// reporting on, pressing Escape while the pointer is over the window
+		// puts the two in one read, and a mouse report's body lands in the
+		// user's document.
+		//
+		// The 50ms escape timer cannot cover this: both bytes arrive in the
+		// same read, so there is no gap to time out on.
+		if b == 0x1b {
+			h.emitEscapeBuffer() // a buffer of just ESC emits "Escape"
+			h.escBuffer = []byte{b}
+			h.inEscape = true
+			escTimeout.Reset(50 * time.Millisecond)
+			return
+		}
+
 		h.escBuffer = append(h.escBuffer, b)
 
 		// Check if we have a complete escape sequence
