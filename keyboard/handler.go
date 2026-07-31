@@ -1401,6 +1401,28 @@ func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
 		return parseModifiedTildeKey(parts)
 	case 'u':
 		return h.parseKittyProtocol(parts)
+	// window-op reports (XTWINOPS replies) ---------------------
+	case 't':
+		// Reply form CSI Ps ; p1 ; p2 t (Ps = 3 pos, 4 pixel size, 6 CELL
+		// pixel size, 8/9 char size). Surface generically; the app dispatches
+		// on Ps. Only the plain numeric reply — never the private
+		// CSI > / = / ? set-requests (app->terminal), which never arrive here.
+		if len(parts) >= 1 && parts[0] != "" && parts[0][0] >= '0' && parts[0][0] <= '9' {
+			return "WinOp:" + params, true // params = body without the final 't'
+		}
+		return "", false
+	// DECRPM reply to a DECRQM query --------------------------
+	case 'y':
+		// CSI ? Ps ; Pm $ y  (Pm: 0 unrecognized, 1 set, 2 reset,
+		// 3 perm-set, 4 perm-reset). Lets the app detect optional-mode
+		// support, e.g. ?1016 SGR-pixels.
+		if len(body) >= 5 && body[0] == '?' && body[len(body)-2] == '$' {
+			ip := splitCSIParams(body[1 : len(body)-2]) // "Ps;Pm"
+			if len(ip) == 2 {
+				return "DECRPM:" + ip[0] + ";" + ip[1], true
+			}
+		}
+		return "", false
 	}
 
 	return "", false
