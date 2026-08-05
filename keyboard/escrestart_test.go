@@ -20,10 +20,17 @@ func TestEscRestartsTheSequence(t *testing.T) {
 		{"\x1b[<35;12;5M", []string{"MouseDrag@12,5"}},
 		{"\x1b[A", []string{"Up"}},
 
-		// Together. Before the fix these emitted the Escape and then the
-		// second sequence's body one character at a time ("[", "<", "3", ...).
+		// Escape + a mouse report in one read still splits: Escape resolves on
+		// its own and the report parses (the esc-while-mouse-tracking fix).
+		// Before that fix the mouse body was typed out one char at a time.
 		{"\x1b\x1b[<35;12;5M", []string{"Escape", "MouseDrag@12,5"}},
-		{"\x1b\x1b[A", []string{"Escape", "Up"}},
+
+		// Option/Alt + arrow is ESC + ESC[X in one read — a single chord, NOT
+		// Escape then an arrow. It reports as M-<arrow>.
+		{"\x1b\x1b[A", []string{"M-Up"}},
+		{"\x1b\x1b[B", []string{"M-Down"}},
+		{"\x1b\x1b[C", []string{"M-Right"}},
+		{"\x1b\x1b[D", []string{"M-Left"}},
 
 		// A double-tap of Escape, which some editors bind.
 		{"\x1b\x1b", []string{"Escape", "Escape"}},

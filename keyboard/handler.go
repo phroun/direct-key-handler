@@ -658,7 +658,21 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 		// The 50ms escape timer cannot cover this: both bytes arrive in the
 		// same read, so there is no gap to time out on.
 		if b == 0x1b {
-			h.emitEscapeBuffer() // a buffer of just ESC emits "Escape"
+			// A second ESC while ONLY the first ESC is buffered is the head of
+			// an Alt/Meta-prefixed escape-sequence key: Option+arrow sends
+			// ESC + ESC[A. Keep buffering the double-ESC and let the resolver
+			// below decide — it parses ESC ESC [X as M-<arrow>, and a double-ESC
+			// that is NOT such a chord (a real Escape immediately followed by
+			// another sequence, e.g. a mouse report landing in the same read) is
+			// split into a standalone Escape plus its trailing sequence further
+			// down. Bare Escape still resolves on its own via the timeout.
+			if len(h.escBuffer) == 1 {
+				h.escBuffer = append(h.escBuffer, b)
+				escTimeout.Reset(50 * time.Millisecond)
+				return
+			}
+			// Mid-sequence ESC abandons the malformed partial and restarts.
+			h.emitEscapeBuffer()
 			h.escBuffer = []byte{b}
 			h.inEscape = true
 			escTimeout.Reset(50 * time.Millisecond)
@@ -728,6 +742,24 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			h.escBuffer = nil
 			h.inEscape = false
 			escTimeout.Stop()
+			return
+		}
+
+		// A double-ESC that did not resolve as an Alt chord (Alt+arrow is
+		// handled by parseModifiedCSI above) is a real Escape immediately
+		// followed by another sequence — classically Escape pressed while mouse
+		// tracking put a report in the same read. Emit the standalone Escape and
+		// re-parse the trailing sequence so it resolves normally (a mouse report
+		// becomes a mouse event) instead of being typed out as literal text.
+		if len(h.escBuffer) >= 2 && h.escBuffer[0] == 0x1b && h.escBuffer[1] == 0x1b {
+			tail := append([]byte(nil), h.escBuffer[1:]...) // second ESC + its sequence
+			h.escBuffer = nil
+			h.inEscape = false
+			escTimeout.Stop()
+			h.emitKey("Escape")
+			for _, tb := range tail {
+				h.processByte(tb, escTimeout)
+			}
 			return
 		}
 
@@ -1192,6 +1224,11 @@ func (h *Handler) parseAltSequence(seq string) (string, bool) {
 	// ESC followed by a character = Alt+char (Meta prefix)
 	if len(seq) == 2 && seq[0] == 0x1b {
 		char := seq[1]
+		// A trailing ESC is not Alt+Escape: ESC ESC is a double Escape (or the
+		// head of an Alt+arrow, resolved before this) — never M-Escape.
+		if char == 0x1b {
+			return "", false
+		}
 		// Lowercase letters: M-a through M-z
 		if char >= 'a' && char <= 'z' {
 			return fmt.Sprintf("M-%c", char), true
@@ -1322,8 +1359,6 @@ func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
 			key = "M-End"
 		}
 		if key != "" {
-			// Emit "Special" first, then return the key
-			h.emitKey("Special")
 			return key, true
 		}
 	}
