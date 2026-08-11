@@ -1143,8 +1143,15 @@ func (h *Handler) handleLineAssembly(key string) {
 		return
 	}
 
-	switch key {
-	case "Return":
+	// Match the nameable keys by identity, not spelling. Line assembly runs
+	// before an application's renaming (emitKey passes the canonical name
+	// here), so these arrive under this package's DEFAULT names — and a
+	// literal would break silently the moment a default changed, as swapping
+	// the Return/Enter defaults would have. The control chords keep literals:
+	// they come from the control byte, not from a renameable name table.
+	k := keyByDefaultName[key]
+	switch {
+	case k == KeyReturn:
 		// Emit the completed line as raw bytes
 		lineBytes := make([]byte, len(h.currentLine))
 		copy(lineBytes, h.currentLine)
@@ -1177,7 +1184,7 @@ func (h *Handler) handleLineAssembly(key string) {
 		h.mu.Lock() // Re-acquire for deferred unlock
 		return
 
-	case "Backspace":
+	case k == KeyBackspace:
 		if len(h.charByteLengths) > 0 {
 			lastCharLen := h.charByteLengths[len(h.charByteLengths)-1]
 			h.currentLine = h.currentLine[:len(h.currentLine)-lastCharLen]
@@ -1185,7 +1192,7 @@ func (h *Handler) handleLineAssembly(key string) {
 			h.echoLocked("\b \b")
 		}
 
-	case "^U":
+	case key == "^U":
 		// Clear line
 		for range h.charByteLengths {
 			h.echoLocked("\b \b")
@@ -1193,7 +1200,7 @@ func (h *Handler) handleLineAssembly(key string) {
 		h.currentLine = nil
 		h.charByteLengths = nil
 
-	case "^C":
+	case key == "^C":
 		// Interrupt - emit empty line
 		h.echoLocked("^C\r\n")
 		h.currentLine = nil
