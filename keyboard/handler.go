@@ -1512,18 +1512,29 @@ func modifierPrefix(mod int) string {
 	}
 	mod--
 
+	// Canonical order: C- G- M- m- S- s- H- ^. It follows the order macOS
+	// renders modifiers (⌃⌥⇧⌘), extended with the ones a Mac keyboard has
+	// no cap for. Order is not meaning -- a consumer that sorts before matching
+	// does not care -- but emitting one fixed order keeps a consumer that
+	// compares strings from having to know which producer it is listening to.
 	prefix := ""
-	if mod&1 != 0 {
-		prefix += "S-"
+	if mod&4 != 0 {
+		prefix += "C-" // ctrl
 	}
 	if mod&2 != 0 {
-		prefix += "M-"
+		prefix += "M-" // alt, which is the Meta a PC keyboard induces
 	}
-	if mod&4 != 0 {
-		prefix += "C-"
+	if mod&32 != 0 {
+		prefix += "m-" // meta proper, a key most keyboards do not have
+	}
+	if mod&1 != 0 {
+		prefix += "S-" // shift
 	}
 	if mod&8 != 0 {
-		prefix += "s-"
+		prefix += "s-" // super / command
+	}
+	if mod&16 != 0 {
+		prefix += "H-" // hyper
 	}
 	return prefix
 }

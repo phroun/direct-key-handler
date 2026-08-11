@@ -167,15 +167,30 @@ handler.onLine((line) => {
 
 ### Modifier Prefixes
 
-| Prefix | Modifier |
-|--------|----------|
-| `M-` | Alt/Meta |
-| `S-` | Shift |
-| `C-` | Control (for special keys) |
-| `s-` | Super/Command |
-| `G-` | Glyph — AltGr / ISO_Level3_Shift (see below) |
+Prefixes are emitted in one fixed order — the order below, which follows the
+order macOS renders modifiers (⌃⌥⇧⌘) extended with the ones a Mac keyboard has
+no cap for. A consumer that sorts before matching does not care, but one that
+compares strings should not have to know which producer it is listening to.
+
+| Prefix | Modifier | Kitty bit |
+|--------|----------|-----------|
+| `C-` | Control (for special keys) | 4 |
+| `G-` | Glyph — AltGr / ISO_Level3_Shift (see below) | 256 (private) |
+| `M-` | Meta, as induced by the PC Alt key | 2 |
+| `m-` | Meta proper — a separate key most keyboards do not have | 32 |
+| `S-` | Shift | 1 |
+| `s-` | Super/Command | 8 |
+| `H-` | Hyper | 16 |
 
 Note: For letter keys with Ctrl, the `^X` notation is used (e.g., `^A` for Ctrl+A).
+
+There is no `A-`. The PC Alt key induces Meta, and `M-` is what that is called
+here — `m-` is the genuinely separate modifier, one of the four a Space Cadet
+keyboard had its own key for.
+
+Caps Lock (64) and Num Lock (128) are reported by the protocol but are
+deliberately **not** turned into prefixes: folding them into a key name would
+make every keystroke typed with Caps Lock on miss its binding.
 
 ## Key names
 
@@ -237,6 +252,20 @@ AltGr disagree about how.
 MIT
 
 ## Change Log
+
+### 0.3.16
+
+- **Hyper and Meta are decoded.** The kitty protocol reports eight modifier
+  bits; two were dropped on the floor since the original Go translation, so a
+  Hyper chord arrived indistinguishable from the unmodified key. Bit 16 is now
+  `H-` (Hyper) and bit 32 is `m-` (Meta proper, as distinct from the `M-` that
+  the PC Alt key induces).
+- **Modifier prefixes are emitted in canonical order** — `C- G- M- m- S- s- H-`
+  — rather than the order the bits happened to be tested in. A chord that was
+  emitted `S-M-Left` is now `M-S-Left`. Consumers that sort before matching are
+  unaffected; one that compares raw strings will see the change.
+- Dropped `A-` from `namePrefixes`. Nothing ever emitted it, and the PC Alt key
+  induces Meta, which is spelled `M-`.
 
 ### 0.3.14
 

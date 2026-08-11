@@ -176,7 +176,11 @@ func AllKeys() []Key {
 // namePrefixes are the modifier prefixes this package puts in front of a base
 // name. Renaming splits them off and puts them back, so an override applies to
 // "M-PageUp" as readily as to "PageUp".
-var namePrefixes = []string{"S-", "M-", "C-", "s-", "H-", "A-", "G-"}
+//
+// There is no "A-": the PC Alt key induces Meta, which is spelled "M-". "m-"
+// is Meta proper — a separate key most keyboards do not have, which the kitty
+// protocol reports on its own bit.
+var namePrefixes = []string{"S-", "M-", "m-", "C-", "s-", "H-", "G-"}
 
 // nameSuffixes are the event/side suffixes that can trail a base name.
 var nameSuffixes = []string{":Release", ":Repeat", ":Left", ":Right"}
