@@ -53,6 +53,39 @@ func TestModifierPrefixCanonicalOrder(t *testing.T) {
 	}
 }
 
+// How Control is spelled depends on the key it pairs with, never on what else
+// is held. A letter is caret-natural, so Control always takes the caret there
+// and hugs the letter — adding Shift or Meta does not push it back out to the
+// "C-" form.
+func TestControlSpellingFollowsTheBaseKey(t *testing.T) {
+	const a = 'a'
+	for _, c := range []struct {
+		name string
+		bits int
+		want string
+	}{
+		{"ctrl", 4, "^A"},
+		{"ctrl+shift", 4 | 1, "S-^A"},
+		{"ctrl+alt", 4 | 2, "M-^A"},
+		{"ctrl+alt+shift", 4 | 2 | 1, "M-S-^A"},
+		{"ctrl+super", 4 | 8, "s-^A"},
+		{"ctrl+alt+super", 4 | 2 | 8, "M-s-^A"},
+		{"ctrl+hyper", 4 | 16, "H-^A"},
+		{"ctrl+meta", 4 | 32, "m-^A"},
+		{"everything", 4 | 2 | 1 | 8 | 16 | 32, "M-m-S-s-H-^A"},
+
+		// No Control: Shift is carried by the letter's own case.
+		{"plain", 0, "a"},
+		{"shift", 1, "A"},
+		{"alt", 2, "M-a"},
+		{"alt+shift", 2 | 1, "M-A"},
+	} {
+		if got := formatLetterKey(a, c.bits+1); got != c.want {
+			t.Errorf("%s: formatLetterKey = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // Caps Lock (64) and Num Lock (128) are reported by the protocol but are not
 // chord modifiers: folding them into a key name would make every keystroke
 // typed with Caps Lock on miss its binding.

@@ -1947,27 +1947,46 @@ func formatLetterKey(letter byte, mod int) string {
 	hasAlt := mod&2 != 0
 	hasCtrl := mod&4 != 0
 	hasSuper := mod&8 != 0
+	hasHyper := mod&16 != 0
+	hasMeta := mod&32 != 0
 
-	var keyPart string
+	// Control is spelled with the caret when the key it pairs with is one the
+	// caret is natural for — a letter, here. That choice depends on the BASE
+	// KEY and never on what else is held: Ctrl+A is "^A" and Ctrl+Shift+A is
+	// "S-^A", not "C-S-A". Adding a modifier does not change how Control is
+	// written.
+	//
+	// Ctrl+Shift+letter only exists on a terminal speaking the kitty protocol,
+	// or on a graphical host. A legacy terminal encodes Ctrl+letter as an ASCII
+	// control code — 26 values, no room for a Shift bit — so Ctrl+Shift+A
+	// arrives there as a plain "^A" and finds the "^A" binding, which is the
+	// right degradation and works only because the two are not merged.
+	keyPart := string(letter)
 	if hasCtrl {
-		upperLetter := letter - 32
-		if hasShift {
-			keyPart = "S-^" + string(upperLetter)
-		} else {
-			keyPart = "^" + string(upperLetter)
-		}
+		keyPart = "^" + string(letter-32)
 	} else if hasShift {
+		// Without Control, Shift is carried by the letter's own case.
 		keyPart = string(letter - 32)
-	} else {
-		keyPart = string(letter)
 	}
 
+	// Canonical order. The caret already sits against the letter, so every
+	// other modifier precedes it in rank: M- m- S- s- H- ^A.
 	prefix := ""
+	if hasAlt {
+		prefix += "M-"
+	}
+	if hasMeta {
+		prefix += "m-"
+	}
+	if hasCtrl && hasShift {
+		// "^A" spent the letter's case on Control, so Shift needs saying.
+		prefix += "S-"
+	}
 	if hasSuper {
 		prefix += "s-"
 	}
-	if hasAlt {
-		prefix += "M-"
+	if hasHyper {
+		prefix += "H-"
 	}
 
 	return prefix + keyPart
