@@ -34,13 +34,13 @@ type Handler struct {
 	stopChan    chan struct{} // Signal to stop reading
 
 	// Output channels (plain Go channels)
-	Keys  chan string  // Parsed key events ("a", "M-a", "F1", etc.)
-	Lines chan []byte  // Assembled lines
+	Keys  chan string // Parsed key events ("a", "M-a", "F1", etc.)
+	Lines chan []byte // Assembled lines
 
 	// Callbacks (optional, called in addition to channel sends)
-	OnKey        func(key string)     // Called on each key event
-	OnLine       func(line []byte)    // Called on each completed line
-	OnPaste      func(content []byte) // Called on bracketed paste content (complete)
+	OnKey        func(key string)       // Called on each key event
+	OnLine       func(line []byte)      // Called on each completed line
+	OnPaste      func(content []byte)   // Called on bracketed paste content (complete)
 	OnPasteChunk func(chunk PasteChunk) // Called on incremental paste chunks
 
 	// OnClipboard is called with an OSC 52 clipboard *response*
@@ -92,6 +92,10 @@ type Handler struct {
 	// macOS Option key decoding
 	decodeMacOSOption bool // When true, decode macOS Option+key chars to M-key notation
 
+	// keyNames renames keys on the way out (see Options.KeyNames). Read-only
+	// after New, so it needs no lock.
+	keyNames map[Key]string
+
 	// Paste key echo. When false, bracketed-paste content is delivered only via
 	// OnPaste/OnPasteChunk and is NOT also re-emitted as individual key events.
 	emitPasteKeys bool
@@ -124,6 +128,14 @@ type Options struct {
 	// DecodeMacOSOption enables decoding of macOS Option+key Unicode characters
 	// to M-key notation (e.g., ∂ → M-d, Ø → M-O). Default: true on Darwin, false otherwise
 	DecodeMacOSOption *bool
+
+	// KeyNames renames the keys an application cares about, so it receives its
+	// own vocabulary instead of translating this package's afterwards (see the
+	// Key type). Entries overlay the defaults; anything unlisted keeps its
+	// DefaultName. Modifier prefixes and event suffixes are preserved, so
+	// naming KeyPageUp "pgup" also turns "M-PageUp" into "M-pgup". nil leaves
+	// every name at its default.
+	KeyNames map[Key]string
 
 	// DebugFn is called with debug messages (optional)
 	DebugFn func(string)
@@ -186,6 +198,7 @@ func New(opts Options) *Handler {
 		pasteChunkSize:    pasteChunkSize,
 		decodeMacOSOption: decodeMacOSOption,
 		emitPasteKeys:     emitPasteKeys,
+		keyNames:          copyKeyNames(opts.KeyNames),
 	}
 
 	// Check if input is a terminal file descriptor
@@ -348,11 +361,11 @@ var escBindings = map[string]string{
 	"\x1b[13~": "F3",
 	"\x1b[14~": "F4",
 	// Linux console F1-F5.
-	"\x1b[[A": "F1",
-	"\x1b[[B": "F2",
-	"\x1b[[C": "F3",
-	"\x1b[[D": "F4",
-	"\x1b[[E": "F5",
+	"\x1b[[A":  "F1",
+	"\x1b[[B":  "F2",
+	"\x1b[[C":  "F3",
+	"\x1b[[D":  "F4",
+	"\x1b[[E":  "F5",
 	"\x1b[15~": "F5",
 	"\x1b[17~": "F6",
 	"\x1b[18~": "F7",
@@ -363,8 +376,8 @@ var escBindings = map[string]string{
 	"\x1b[24~": "F12",
 
 	// Navigation keys
-	"\x1b[H": "Home",
-	"\x1b[F": "End",
+	"\x1b[H":  "Home",
+	"\x1b[F":  "End",
 	"\x1b[1~": "Home",
 	"\x1b[4~": "End",
 	"\x1b[2~": "Insert",
@@ -394,7 +407,7 @@ var controlKeys = map[byte]string{
 	10:  "^J",        // Ctrl-J (LF) - distinct from Enter
 	11:  "^K",
 	12:  "^L",
-	13:  "Enter",     // Ctrl-M (CR)
+	13:  "Return", // Ctrl-M (CR) - the home-row key; the keypad's is "Enter"
 	14:  "^N",
 	15:  "^O",
 	16:  "^P",
@@ -457,10 +470,10 @@ var macOSOptionChars = map[rune]string{
 	'˝': "M-G", // Option+Shift+g
 	'Ó': "M-H", // Option+Shift+h
 	// Option+Shift+I produces ˆ (same as Option+i) - handled above
-	'Ô': "M-J", // Option+Shift+j
+	'Ô':      "M-J", // Option+Shift+j
 	'\uF8FF': "M-K", // Option+Shift+k (Apple logo, private use area)
-	'Ò': "M-L", // Option+Shift+l
-	'Â': "M-M", // Option+Shift+m
+	'Ò':      "M-L", // Option+Shift+l
+	'Â':      "M-M", // Option+Shift+m
 	// Option+Shift+N produces ˜ (same as Option+n) - handled above
 	'Ø': "M-O", // Option+Shift+o
 	'∏': "M-P", // Option+Shift+p
@@ -488,17 +501,17 @@ var macOSOptionChars = map[rune]string{
 	'º': "M-0", // Option+0
 
 	// Option+symbol
-	'–': "M--",  // Option+minus (en dash)
-	'≠': "M-=",  // Option+equals
-	'“': "M-[", // Option+[ (left double quote, U+201C — the char Option actually emits; keying on ASCII '"' here would rewrite a plain double quote into a curly one)
+	'–':      "M--",  // Option+minus (en dash)
+	'≠':      "M-=",  // Option+equals
+	'“':      "M-[",  // Option+[ (left double quote, U+201C — the char Option actually emits; keying on ASCII '"' here would rewrite a plain double quote into a curly one)
 	'\u2019': "M-]",  // Option+] (right single quote)
-	'«': "M-\\", // Option+backslash
-	'…': "M-;",  // Option+semicolon
-	'æ': "M-'",  // Option+quote
-	'≤': "M-,",  // Option+comma
-	'≥': "M-.",  // Option+period
-	'÷': "M-/",  // Option+slash
-	'`': "M-`",  // Option+backtick (same as backtick on some layouts)
+	'«':      "M-\\", // Option+backslash
+	'…':      "M-;",  // Option+semicolon
+	'æ':      "M-'",  // Option+quote
+	'≤':      "M-,",  // Option+comma
+	'≥':      "M-.",  // Option+period
+	'÷':      "M-/",  // Option+slash
+	'`':      "M-`",  // Option+backtick (same as backtick on some layouts)
 }
 
 // readLoop continuously reads raw bytes from input
@@ -941,11 +954,16 @@ func (h *Handler) emitKey(key string) {
 		}
 	}
 
-	h.debug(fmt.Sprintf("Key: %q", key))
+	// The application's own name for this key, if it chose one. Line assembly
+	// below matches on the canonical name, so it keeps `key`; everything that
+	// leaves this package gets `display`.
+	display := h.displayKey(key)
+
+	h.debug(fmt.Sprintf("Key: %q", display))
 
 	// Call callback if set
 	if h.OnKey != nil {
-		h.OnKey(key)
+		h.OnKey(display)
 	}
 
 	// Check if we're in line read mode
@@ -957,6 +975,7 @@ func (h *Handler) emitKey(key string) {
 		// In line read mode: keys go to line assembly
 		h.handleLineAssembly(key)
 	} else {
+		key = display
 		// Normal mode: keys go to Keys channel
 		select {
 		case h.Keys <- key:
@@ -1033,7 +1052,7 @@ func (h *Handler) emitPaste(content []byte) {
 			}
 			// Handle special characters
 			if r == '\r' {
-				h.emitKey("Enter")
+				h.emitKey("Return")
 			} else if r == '\n' {
 				h.emitKey("^J")
 			} else if r == '\t' {
@@ -1125,7 +1144,7 @@ func (h *Handler) handleLineAssembly(key string) {
 	}
 
 	switch key {
-	case "Enter":
+	case "Return":
 		// Emit the completed line as raw bytes
 		lineBytes := make([]byte, len(h.currentLine))
 		copy(lineBytes, h.currentLine)
@@ -1667,7 +1686,7 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 // Kitty protocol special keys
 var kittySpecialKeys = map[int]string{
 	9:   "Tab",
-	13:  "Enter",
+	13:  "Return",
 	27:  "Escape",
 	32:  "Space",
 	127: "Backspace",
@@ -1701,7 +1720,7 @@ var kittySpecialKeys = map[int]string{
 	57382: "F19",
 	57383: "F20",
 	// Keypad
-	57414: "Return", // KP_Enter - distinct from Enter (13)
+	57414: "Enter", // KP_Enter - the keypad key, distinct from Return (13)
 	// Navigation
 	57417: "Up",
 	57418: "Down",
