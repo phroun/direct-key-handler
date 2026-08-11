@@ -1812,6 +1812,19 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 		eventSuffix = ":Repeat"
 	}
 
+	// Glyph modifier (private extension; kitty modifier bit value 256). A host
+	// that composes an AltGr / ISO_Level3_Shift character can carry it as
+	// CSI <glyph-codepoint> ; 257 u so it reaches the application as a distinct
+	// "G-" chord rather than an anonymous typed character (letting a keymap
+	// intercept e.g. G-€ while an unbound G-€ still self-inserts "€"). Glyph's
+	// whole purpose is an alternate produced character, so the keycode IS that
+	// glyph; surface it as "G-<glyph>" with any co-held standard modifiers
+	// preserved. Handled before the letter/symbol/number formatters because
+	// those re-derive a key from an ASCII base, which a composed glyph is not.
+	if bits := mod - 1; bits&256 != 0 && keycode >= 32 && keycode < 0x110000 {
+		return "G-" + modifierPrefix((bits&^256)+1) + string(rune(keycode)) + eventSuffix, true
+	}
+
 	// Letter keys
 	if keycode >= 'a' && keycode <= 'z' {
 		return formatLetterKey(byte(keycode), mod) + eventSuffix, true
