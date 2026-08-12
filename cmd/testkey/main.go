@@ -12,9 +12,9 @@ import (
 const (
 	// Enable Kitty keyboard protocol with all flags
 	// Flags: 1=disambiguate escape codes, 2=report event types, 4=report alternate keys, 8=report all keys as escape codes, 16=report associated text
-	kittyEnable  = "\x1b[>1u"      // Basic mode (disambiguate escape codes)
-	kittyEnhance = "\x1b[>31u"     // Full mode (all flags)
-	kittyDisable = "\x1b[<u"       // Pop/disable
+	kittyEnable  = "\x1b[>1u"  // Basic mode (disambiguate escape codes)
+	kittyEnhance = "\x1b[>31u" // Full mode (all flags)
+	kittyDisable = "\x1b[<u"   // Pop/disable
 
 	// Mouse reporting
 	mouseEnableSGR    = "\x1b[?1006h" // SGR mouse mode
