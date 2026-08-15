@@ -400,6 +400,14 @@ var escBindings = map[string]string{
 	"\x1bOB": "Down",
 	"\x1bOC": "Right",
 	"\x1bOD": "Left",
+
+	// The keypad's Enter, which a terminal in application keypad mode (DECKPAM)
+	// sends as SS3 M. It is the only encoding that tells this key apart from the
+	// home-row Return: in numeric keypad mode both send CR, and a reader given
+	// CR cannot know which was struck. Without this entry the sequence decoded
+	// as three keystrokes — Escape, then O, then M — so the keypad's Enter was
+	// unreadable from any terminal that sent it.
+	"\x1bOM": "Enter",
 }
 
 // Control key names

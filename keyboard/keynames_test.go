@@ -93,6 +93,35 @@ func TestKeyNamesDefaultUnchanged(t *testing.T) {
 	}
 }
 
+// The two Enter keys, told apart the only way a terminal offers.
+//
+// In numeric keypad mode both send CR, and a reader handed CR cannot know which
+// was struck — that is the wire's limit, not this package's. In application
+// keypad mode (DECKPAM) the keypad's sends SS3 M instead, and that sequence is
+// the whole distinction. It decoded as three keystrokes — Escape, O, M — which
+// left the keypad's Enter unreadable from any terminal that sent it, and made
+// the KeyKeypadEnter constant something nothing could ever produce on the
+// legacy path.
+func TestBothEnterKeysAreReadable(t *testing.T) {
+	for _, c := range []struct{ raw, want, what string }{
+		{"\r", "Return", "CR is the home-row key"},
+		{"\x1bOM", "Enter", "SS3 M is the keypad's, in application keypad mode"},
+		{"\x1b[57414u", "Enter", "and the kitty protocol reports it by keycode"},
+		{"\x1b[13u", "Return", "as it does the home-row key"},
+	} {
+		got := feedKeys(t, c.raw)
+		if len(got) != 1 || got[0] != c.want {
+			t.Errorf("%s: %q -> %v, want [%s]", c.what, c.raw, got, c.want)
+		}
+	}
+
+	// The two must not collapse onto one name, which is the point of all four.
+	if feedKeys(t, "\r")[0] == feedKeys(t, "\x1bOM")[0] {
+		t.Error("the home-row and keypad Enter keys decode to one name; an " +
+			"application can no longer tell which key the user struck")
+	}
+}
+
 // The three erase inputs are three names, and which name goes with which is
 // the whole point: an application that maps terminal input to key events has
 // to be able to tell them apart, and folding any two together destroys that
