@@ -30,12 +30,29 @@ const (
 	KeyEscape
 	KeyTab
 	KeySpace
-	KeyBackspace
+
+	// The two erase bytes, which are two keys on the wire and one key in most
+	// people's hands. A terminal sends BS (8) or DEL (127) for its backspace
+	// depending on its lineage — terminfo still carries both answers, kbs=^H
+	// for vt100/vt220/ansi and kbs=^? for xterm, linux, screen, tmux, rxvt —
+	// so an application that maps input to key events cannot know which it
+	// will get. Naming them apart is the only way it can tell; folding them
+	// together here would throw the distinction away before anyone could.
+	//
+	// Note KeyDEL is what a MODERN terminal's backspace key produces. The
+	// kitty protocol reports keys rather than bytes, so it resolves the
+	// ambiguity on its own and gives KeyBackspace directly.
+	KeyBackspace   // BS (8), Ctrl-H
+	KeyDEL         // DEL (127), the byte most terminals send for backspace
 	KeyReturn      // the home-row key: CR, Ctrl-M
 	KeyKeypadEnter // the smaller key on the numeric keypad
 
 	KeyInsert
-	KeyDelete // forward delete, not backspace
+	// KeyDelete is forward delete — the key labelled Del, which sends CSI 3 ~
+	// and erases ahead of the cursor. It is NOT KeyDEL: that is the DEL
+	// character, which erases behind. They are named "FDel" and "Delete" to
+	// keep the pair from reading as each other.
+	KeyDelete
 	KeyHome
 	KeyEnd
 	KeyPageUp
@@ -84,11 +101,12 @@ var defaultKeyNames = map[Key]string{
 	KeyTab:         "Tab",
 	KeySpace:       "Space",
 	KeyBackspace:   "Backspace",
+	KeyDEL:         "Delete",
 	KeyReturn:      "Return",
 	KeyKeypadEnter: "Enter",
 
 	KeyInsert:   "Insert",
-	KeyDelete:   "Delete",
+	KeyDelete:   "FDel",
 	KeyHome:     "Home",
 	KeyEnd:      "End",
 	KeyPageUp:   "PageUp",

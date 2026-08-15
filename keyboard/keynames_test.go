@@ -41,13 +41,15 @@ func TestKeyNamesRenameOnEmit(t *testing.T) {
 		KeyDelete:    "fdel",
 		KeyReturn:    "return",
 		KeyBackspace: "back",
+		KeyDEL:       "del",
 	}
 	cases := []struct{ raw, want string }{
 		{"\x1b\x1b", "esc"},   // ESC ESC resolves a bare Escape
 		{"\x1b[5~", "pgup"},   // legacy CSI path
 		{"\x1b[3~", "fdel"},   // legacy tilde path
 		{"\r", "return"},      // control byte path
-		{"\x7f", "back"},      // DEL
+		{"\x08", "back"},      // BS, the vt100 lineage's erase
+		{"\x7f", "del"},       // DEL, what most terminals send for the same key
 		{"\x1b[57364u", "F1"}, // unlisted: keeps the default name
 	}
 	for _, c := range cases {
@@ -81,7 +83,7 @@ func TestKeyNamesDefaultUnchanged(t *testing.T) {
 	cases := []struct{ raw, want string }{
 		{"\x1b[5~", "PageUp"},
 		{"\r", "Return"},
-		{"\x1b[3~", "Delete"},
+		{"\x1b[3~", "FDel"},
 	}
 	for _, c := range cases {
 		got := feedKeys(t, c.raw)
@@ -89,6 +91,75 @@ func TestKeyNamesDefaultUnchanged(t *testing.T) {
 			t.Errorf("%q -> %v, want [%s]", c.raw, got, c.want)
 		}
 	}
+}
+
+// The three erase inputs are three names, and which name goes with which is
+// the whole point: an application that maps terminal input to key events has
+// to be able to tell them apart, and folding any two together destroys that
+// before the application can see it.
+//
+// The pairing is easy to get backwards, and did go backwards more than once
+// while it was being settled, so it is pinned here rather than left to the
+// tables. BS and DEL both erase BEHIND the cursor — they are the same key on
+// two lineages of terminal, and terminfo still answers both ways (kbs=^H for
+// vt100/vt220/ansi, kbs=^? for xterm, linux, screen, tmux, rxvt). Only CSI 3 ~
+// erases AHEAD, and it is the one named for the key rather than for a byte.
+func TestEraseInputsAreThreeDistinctNames(t *testing.T) {
+	for _, c := range []struct{ raw, want, what string }{
+		{"\x08", "Backspace", "BS (8), what a vt100-lineage terminal sends"},
+		{"\x7f", "Delete", "DEL (127), what most terminals in use send"},
+		{"\x1b[3~", "FDel", "CSI 3 ~, the only one that erases forward"},
+	} {
+		got := feedKeys(t, c.raw)
+		if len(got) != 1 || got[0] != c.want {
+			t.Errorf("%s: %q -> %v, want [%s]", c.what, c.raw, got, c.want)
+		}
+	}
+
+	// And no two of them collide, which is the property a consumer relies on.
+	seen := map[string]string{}
+	for _, raw := range []string{"\x08", "\x7f", "\x1b[3~"} {
+		got := feedKeys(t, raw)
+		if len(got) != 1 {
+			continue
+		}
+		if prev, dup := seen[got[0]]; dup {
+			t.Errorf("%q and %q both emit %q; a consumer cannot tell them apart",
+				prev, raw, got[0])
+		}
+		seen[got[0]] = raw
+	}
+}
+
+// A person pressing backspace in line-read mode erases a character, whichever
+// byte their terminal chose to send for it. Naming the two bytes apart is
+// deliberate, but line assembly is where a human is typing, so it accepts
+// both — matching only KeyBackspace left the key dead on every terminal whose
+// kbs is ^?, which is most of them.
+func TestLineModeErasesOnEitherEraseByte(t *testing.T) {
+	for _, c := range []struct{ raw, what string }{
+		{"\x08", "BS"},
+		{"\x7f", "DEL"},
+	} {
+		h := New(Options{})
+		h.inLineReadMode = true
+		h.currentLine = []byte("ab")
+		h.charByteLengths = []int{1, 1}
+		h.handleLineAssembly(keyForRaw(t, c.raw))
+		if got := string(h.currentLine); got != "a" {
+			t.Errorf("%s: line = %q, want %q — the erase key did nothing", c.what, got, "a")
+		}
+	}
+}
+
+// keyForRaw feeds one raw sequence and returns the single key it produced.
+func keyForRaw(t *testing.T, raw string) string {
+	t.Helper()
+	got := feedKeys(t, raw)
+	if len(got) != 1 {
+		t.Fatalf("%q produced %v, want exactly one key", raw, got)
+	}
+	return got[0]
 }
 
 // The home-row key and the keypad's are two physical keys and must stay
