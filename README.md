@@ -156,9 +156,10 @@ handler.onLine((line) => {
 |-------|--------|
 | Regular characters | `a`, `Z`, `5`, `!` |
 | Control keys | `^A`, `^C`, `^Z` |
-| Special keys | `Return`, `Enter`, `Tab`, `Space`, `Backspace`, `Escape` |
+| Special keys | `Return`, `Enter`, `Tab`, `Space`, `Escape` |
+| Erase keys | `Backspace` (BS, 8), `Delete` (DEL, 127), `FDel` (CSI 3 ~) |
 | Arrow keys | `Up`, `Down`, `Left`, `Right` |
-| Navigation | `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Delete` |
+| Navigation | `Home`, `End`, `PageUp`, `PageDown`, `Insert` |
 | Function keys | `F1` through `F12` |
 | Alt/Meta + key | `M-a`, `M-x`, `M-Enter` |
 | Shift + key | `S-Tab`, `S-Up` |
@@ -203,6 +204,7 @@ h := keyboard.New(keyboard.Options{
     KeyNames: map[keyboard.Key]string{
         keyboard.KeyEscape:    "esc",
         keyboard.KeyBackspace: "back",
+        keyboard.KeyDEL:       "del",
         keyboard.KeyDelete:    "fdel",
         keyboard.KeyPageUp:    "pgup",
     },
@@ -219,8 +221,9 @@ The full default set:
 
 | Group | Names |
 |-------|-------|
-| Editing | `Escape`, `Tab`, `Space`, `Backspace`, `Return`, `Enter` |
-| Navigation | `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown` |
+| Editing | `Escape`, `Tab`, `Space`, `Return`, `Enter` |
+| Erasing | `Backspace`, `Delete`, `FDel` |
+| Navigation | `Insert`, `Home`, `End`, `PageUp`, `PageDown` |
 | Arrows | `Up`, `Down`, `Left`, `Right` |
 | Locks and system | `CapsLock`, `ScrollLock`, `NumLock`, `PrintScreen`, `Pause`, `Menu` |
 | Function | `F1` … `F20` |
@@ -229,6 +232,21 @@ The full default set:
 terminal speaking the Kitty protocol can report separately. They are two
 physical keys and are reported as two — an application that wants them
 interchangeable says so.
+
+The three erase names follow the same principle. `Backspace` is BS (8) and
+`Delete` is DEL (127): both erase *behind* the cursor, and which one arrives
+depends on the terminal's lineage rather than on which key was pressed —
+terminfo still answers both ways, `kbs=^H` for vt100, vt220 and ansi, `kbs=^?`
+for xterm, linux, screen, tmux and rxvt. `FDel` is the separate key that sends
+CSI 3 ~ and erases *ahead*.
+
+They are named apart because folding them would destroy the distinction before
+an application could see it, and an application that maps terminal input to key
+events needs it — a browser embedder reading BS as Ctrl-H, for instance, drops
+the key entirely. An application that does not care should alias `Backspace`
+and `Delete` to one binding rather than have this package guess. Under the
+Kitty protocol the question does not arise: it reports the backspace *key*, so
+`Backspace` arrives regardless of byte.
 
 ## The Glyph modifier
 

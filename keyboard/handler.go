@@ -391,7 +391,7 @@ var escBindings = map[string]string{
 	"\x1b[1~": "Home",
 	"\x1b[4~": "End",
 	"\x1b[2~": "Insert",
-	"\x1b[3~": "Delete",
+	"\x1b[3~": "FDel", // forward delete; the DEL character is "Delete"
 	"\x1b[5~": "PageUp",
 	"\x1b[6~": "PageDown",
 
@@ -404,39 +404,44 @@ var escBindings = map[string]string{
 
 // Control key names
 var controlKeys = map[byte]string{
-	0:   "^@", // Ctrl-Space or Ctrl-@
-	1:   "^A",
-	2:   "^B",
-	3:   "^C",
-	4:   "^D",
-	5:   "^E",
-	6:   "^F",
-	7:   "^G",
-	8:   "Backspace", // Ctrl-H
-	9:   "Tab",       // Ctrl-I
-	10:  "^J",        // Ctrl-J (LF) - distinct from Enter
-	11:  "^K",
-	12:  "^L",
-	13:  "Return", // Ctrl-M (CR) - the home-row key; the keypad's is "Enter"
-	14:  "^N",
-	15:  "^O",
-	16:  "^P",
-	17:  "^Q",
-	18:  "^R",
-	19:  "^S",
-	20:  "^T",
-	21:  "^U",
-	22:  "^V",
-	23:  "^W",
-	24:  "^X",
-	25:  "^Y",
-	26:  "^Z",
-	27:  "Escape", // Escape itself (handled specially)
-	28:  "^\\",
-	29:  "^]",
-	30:  "^^",
-	31:  "^_",
-	127: "Backspace", // DEL
+	0:  "^@", // Ctrl-Space or Ctrl-@
+	1:  "^A",
+	2:  "^B",
+	3:  "^C",
+	4:  "^D",
+	5:  "^E",
+	6:  "^F",
+	7:  "^G",
+	8:  "Backspace", // Ctrl-H; the OTHER erase byte is 127, named "Delete"
+	9:  "Tab",       // Ctrl-I
+	10: "^J",        // Ctrl-J (LF) - distinct from Enter
+	11: "^K",
+	12: "^L",
+	13: "Return", // Ctrl-M (CR) - the home-row key; the keypad's is "Enter"
+	14: "^N",
+	15: "^O",
+	16: "^P",
+	17: "^Q",
+	18: "^R",
+	19: "^S",
+	20: "^T",
+	21: "^U",
+	22: "^V",
+	23: "^W",
+	24: "^X",
+	25: "^Y",
+	26: "^Z",
+	27: "Escape", // Escape itself (handled specially)
+	28: "^\\",
+	29: "^]",
+	30: "^^",
+	31: "^_",
+	// DEL, which is what most terminals in use send for their backspace key
+	// (terminfo kbs=^? for xterm, linux, screen, tmux, rxvt). Named apart from
+	// byte 8 so an application that maps input to key events can tell which
+	// one it was handed; both erase backwards, and an application that does
+	// not care should alias them rather than have this table guess.
+	127: "Delete",
 }
 
 // macOSOptionChars maps Unicode characters produced by macOS Option+key to M-key notation
@@ -1168,7 +1173,7 @@ func (h *Handler) emitPaste(content []byte) {
 			} else if r == '\t' {
 				h.emitKey("Tab")
 			} else if r == 0x7f {
-				h.emitKey("Backspace")
+				h.emitKey("Delete") // the DEL character, as controlKeys names it
 			} else if r < 32 {
 				if key, ok := controlKeys[byte(r)]; ok {
 					h.emitKey(key)
@@ -1294,7 +1299,12 @@ func (h *Handler) handleLineAssembly(key string) {
 		h.mu.Lock() // Re-acquire for deferred unlock
 		return
 
-	case k == KeyBackspace:
+	// Both erase bytes, because line assembly is where a person is typing and
+	// they pressed one backspace key. Which byte their terminal sent for it is
+	// exactly the thing this package refuses to guess at the naming layer, so
+	// it has to accept both here — matching only KeyBackspace would leave the
+	// key dead on every terminal whose kbs is ^?, which is most of them.
+	case k == KeyBackspace || k == KeyDEL:
 		if len(h.charByteLengths) > 0 {
 			lastCharLen := h.charByteLengths[len(h.charByteLengths)-1]
 			h.currentLine = h.currentLine[:len(h.currentLine)-lastCharLen]
@@ -1785,7 +1795,7 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 	tildeKeys := map[int]string{
 		1:  "Home",
 		2:  "Insert",
-		3:  "Delete",
+		3:  "FDel", // forward delete, matching escBindings for the bare form
 		4:  "End",
 		5:  "PageUp",
 		6:  "PageDown",
@@ -1826,13 +1836,19 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 	return "", false
 }
 
-// Kitty protocol special keys
+// Kitty protocol special keys.
+//
+// These are KEYCODES, not bytes, which is why 127 answers differently here
+// than in controlKeys: the kitty protocol reports which key was pressed, so
+// 127 identifies the backspace KEY and carries none of the BS/DEL ambiguity
+// the legacy byte does. Naming it "Delete" to match controlKeys[127] would
+// discard the very disambiguation this protocol exists to provide.
 var kittySpecialKeys = map[int]string{
 	9:   "Tab",
 	13:  "Return",
 	27:  "Escape",
 	32:  "Space",
-	127: "Backspace",
+	127: "Backspace", // the KEY, not the DEL byte — see above
 	// Functional keys (Kitty extended codes)
 	57358: "CapsLock",
 	57359: "ScrollLock",
@@ -1874,7 +1890,7 @@ var kittySpecialKeys = map[int]string{
 	57423: "Home",
 	57424: "End",
 	57425: "Insert",
-	57426: "Delete",
+	57426: "FDel", // forward delete; kitty's backspace key is 127 above
 }
 
 // modifierKeyInfo holds modifier name and side (Left/Right)
