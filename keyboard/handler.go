@@ -89,6 +89,16 @@ type Handler struct {
 	clipboardBuffer []byte // accumulates "<selection>;<base64>"
 	clipboardEsc    bool   // last byte was ESC (a possible ST terminator start)
 
+	// APC (Application Program Command) response state, gathered exactly like
+	// the OSC 52 body above: ESC _ ... ST. The kitty graphics protocol answers
+	// here (ESC _ G i=<id>;OK ESC \), which is how an application asks whether
+	// the terminal can show it a picture. Surfaced as one "APC:<body>" key
+	// rather than interpreted, since APC is a private channel and the payload
+	// means whatever the two ends agreed it means.
+	inAPC     bool
+	apcBuffer []byte // accumulates the body between ESC _ and the terminator
+	apcEsc    bool   // last byte was ESC (a possible ST terminator start)
+
 	// macOS Option key decoding
 	decodeMacOSOption bool // When true, decode macOS Option+key chars to M-key notation
 
@@ -559,6 +569,16 @@ func (h *Handler) processLoop() {
 			}
 
 		case <-escTimeout.C:
+			// An APC that never terminated was not one: ESC _ is equally how
+			// a terminal reports Alt+_, and a reply from the terminal arrives
+			// as one burst rather than trailing off.
+			if h.inAPC {
+				if h.apcEsc {
+					h.finishAPC() // the ESC was a terminator; its '\' never came
+				} else {
+					h.abandonAPC(escTimeout)
+				}
+			}
 			// Escape sequence timeout - try Alt sequence parsing before giving up
 			if h.inEscape && len(h.escBuffer) > 0 {
 				seq := string(h.escBuffer)
@@ -585,6 +605,21 @@ const (
 // (<selection>;<base64>) follows and is terminated by BEL (0x07) or ST (ESC \).
 const osc52Start = "\x1b]52;"
 
+// apcStart introduces an APC string: ESC _ . The body runs to a BEL or ST
+// (ESC \) terminator, as OSC 52's does.
+const apcStart = "\x1b_"
+
+// maxAPCBody caps an APC body. A reply is a few dozen bytes; anything longer
+// is a terminal echoing something unexpected, and the buffer must not grow
+// without bound on a stream we do not control.
+const maxAPCBody = 4096
+
+// escapeTimeout is how long an incomplete escape sequence waits for the rest
+// of itself before being read as what it would otherwise be - the same window
+// the escape disambiguation below has always used, named here because the APC
+// accumulator has to hold to it too.
+const escapeTimeout = 50 * time.Millisecond
+
 // pasteEndBufferSize is the number of bytes to keep buffered during paste
 // to avoid splitting the end sequence (\x1b[201~ is 6 bytes, we buffer 7 to be safe)
 const pasteEndBufferSize = 7
@@ -610,6 +645,31 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			h.clipboardEsc = true
 		default:
 			h.clipboardBuffer = append(h.clipboardBuffer, b)
+		}
+		return
+	}
+
+	// Handle an in-progress APC response: accumulate the body until BEL or
+	// ST (ESC \), then emit it. Same shape as the OSC 52 branch above.
+	if h.inAPC {
+		if h.apcEsc {
+			h.apcEsc = false
+			h.finishAPC() // ESC (\ for ST, or stray) ends the body
+			return
+		}
+		switch b {
+		case 0x07: // BEL terminator
+			h.finishAPC()
+		case 0x1b: // ESC - possible ST terminator start
+			h.apcEsc = true
+			escTimeout.Reset(escapeTimeout)
+		default:
+			if len(h.apcBuffer) < maxAPCBody {
+				h.apcBuffer = append(h.apcBuffer, b)
+			}
+			// A real reply arrives as one burst; keep the abandon timer
+			// ahead of it (see the escTimeout case in the read loop).
+			escTimeout.Reset(escapeTimeout)
 		}
 		return
 	}
@@ -719,6 +779,22 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			h.clipboardBuffer = nil
 			h.clipboardEsc = false
 			escTimeout.Stop()
+			return
+		}
+
+		// Check for an APC start (ESC _). The body runs until BEL/ST and is
+		// gathered by the h.inAPC branch above.
+		if seq == apcStart {
+			h.debug("APC response start detected")
+			h.inEscape = false
+			h.escBuffer = nil
+			h.inAPC = true
+			h.apcBuffer = nil
+			h.apcEsc = false
+			// ESC _ is also how a terminal reports Alt+_, so this cannot
+			// simply commit to APC and wait: an unterminated one is given
+			// back as that key (see abandonAPC).
+			escTimeout.Reset(escapeTimeout)
 			return
 		}
 
@@ -993,6 +1069,40 @@ func (h *Handler) emitKey(key string) {
 				// Still can't send, just drop this key
 			}
 		}
+	}
+}
+
+// finishAPC ends an APC response, emitting the accumulated body as one
+// "APC:<body>" key. The body is passed through verbatim: APC is a private
+// channel between an application and the terminal, so this layer's job is to
+// find its boundaries, not to read it. An empty body emits nothing — there is
+// no reply in it to dispatch on.
+func (h *Handler) finishAPC() {
+	body := string(h.apcBuffer)
+	h.inAPC = false
+	h.apcBuffer = nil
+	h.apcEsc = false
+	if body == "" {
+		return
+	}
+	h.debug(fmt.Sprintf("APC response, %d bytes", len(body)))
+	h.emitKey("APC:" + body)
+}
+
+// abandonAPC gives up on an APC that never terminated and hands the input
+// back the way it would have arrived before: ESC _ as the Alt+_ key, then
+// whatever was accumulated as ordinary input. Typing must never be swallowed
+// by a reply that turned out not to be one.
+func (h *Handler) abandonAPC(escTimeout *time.Timer) {
+	body := h.apcBuffer
+	h.inAPC = false
+	h.apcBuffer = nil
+	h.apcEsc = false
+	if key, ok := h.parseAltSequence(apcStart); ok {
+		h.emitKey(key)
+	}
+	for _, b := range body {
+		h.processByte(b, escTimeout)
 	}
 }
 
@@ -1470,6 +1580,21 @@ func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
 		// CSI > / = / ? set-requests (app->terminal), which never arrive here.
 		if len(parts) >= 1 && parts[0] != "" && parts[0][0] >= '0' && parts[0][0] <= '9' {
 			return "WinOp:" + params, true // params = body without the final 't'
+		}
+		return "", false
+	// Device Attributes replies -------------------------------
+	case 'c':
+		// CSI ? Ps ; Ps ; ... c is the PRIMARY DA reply: the terminal's list
+		// of what it supports, where attribute 4 is Sixel graphics. CSI > ...
+		// c is the SECONDARY DA reply (terminal id, version, ROM). Both are
+		// surfaced generically, like WinOp above; the app dispatches on the
+		// attributes it cares about. Only replies reach here — the plain
+		// CSI c / CSI > c REQUESTS travel app->terminal and never arrive.
+		switch {
+		case len(body) >= 2 && body[0] == '?':
+			return "DA1:" + body[1:len(body)-1], true
+		case len(body) >= 2 && body[0] == '>':
+			return "DA2:" + body[1:len(body)-1], true
 		}
 		return "", false
 	// DECRPM reply to a DECRQM query --------------------------
