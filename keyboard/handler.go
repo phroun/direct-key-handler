@@ -1703,6 +1703,32 @@ func parseModifierParam(s string) int {
 	return mod
 }
 
+// parseModifierField reads a CSI modifier parameter that may carry the kitty
+// protocol's EVENT TYPE as a sub-parameter: "5" is Ctrl on a press, "5:3" is
+// Ctrl on a release. It returns the modifier code and the name suffix the event
+// earns — "" for a press, ":Release" or ":Repeat" otherwise.
+//
+// The event type rides in the modifier field for every CSI form the protocol
+// touches, not only the "u" one: an arrow key's release is CSI 1;1:3A and a
+// function key's is CSI 15;1:3~. parseModifierParam stops at the colon and
+// answers 1, so both of those used to read back as an unmodified PRESS —
+// releases did not merely go missing, they arrived as a second keystroke. A
+// held arrow key moved the cursor twice, and nothing downstream could tell.
+func parseModifierField(s string) (mod int, eventSuffix string) {
+	base, sub, found := strings.Cut(s, ":")
+	mod = parseModifierParam(base)
+	if !found {
+		return mod, ""
+	}
+	switch parseIntParam(sub) {
+	case 2:
+		return mod, ":Repeat"
+	case 3:
+		return mod, ":Release"
+	}
+	return mod, ""
+}
+
 // parseIntParam parses an integer parameter string where 0 is valid
 // Used for mouse button codes and coordinates where 0 is meaningful
 func parseIntParam(s string) int {
@@ -1742,9 +1768,9 @@ func parseModifiedCursorKey(finalByte byte, parts []string) (string, bool) {
 		return "", false
 	}
 
-	mod := parseModifierParam(parts[1])
+	mod, event := parseModifierField(parts[1])
 	prefix := modifierPrefix(mod)
-	return prefix + baseName, true
+	return prefix + baseName + event, true
 }
 
 // parseModifiedHomeEnd handles ESC [ 1 ; <mod> <H|F>
@@ -1767,9 +1793,9 @@ func parseModifiedHomeEnd(finalByte byte, parts []string) (string, bool) {
 		return "", false
 	}
 
-	mod := parseModifierParam(parts[1])
+	mod, event := parseModifierField(parts[1])
 	prefix := modifierPrefix(mod)
-	return prefix + baseName, true
+	return prefix + baseName + event, true
 }
 
 // parseModifiedF1toF4 handles ESC [ 1 ; <mod> <P-S>
@@ -1794,9 +1820,9 @@ func parseModifiedF1toF4(finalByte byte, parts []string) (string, bool) {
 		return "", false
 	}
 
-	mod := parseModifierParam(parts[1])
+	mod, event := parseModifierField(parts[1])
 	prefix := modifierPrefix(mod)
-	return prefix + baseName, true
+	return prefix + baseName + event, true
 }
 
 // parseModifiedTildeKey handles ESC [ <num> ; <mod> ~
@@ -1837,9 +1863,9 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 	}
 
 	if len(parts) == 2 {
-		mod := parseModifierParam(parts[1])
+		mod, event := parseModifierField(parts[1])
 		prefix := modifierPrefix(mod)
-		return prefix + baseName, true
+		return prefix + baseName + event, true
 	}
 
 	return "", false
