@@ -583,7 +583,7 @@ func (h *Handler) processLoop() {
 
 		case <-escTimeout.C:
 			// An APC that never terminated was not one: ESC _ is equally how
-			// a terminal reports Alt+_, and a reply from the terminal arrives
+			// a terminal reports Mega+_, and a reply from the terminal arrives
 			// as one burst rather than trailing off.
 			if h.inAPC {
 				if h.apcEsc {
@@ -592,11 +592,11 @@ func (h *Handler) processLoop() {
 					h.abandonAPC(escTimeout)
 				}
 			}
-			// Escape sequence timeout - try Alt sequence parsing before giving up
+			// Escape sequence timeout - try Mega sequence parsing before giving up
 			if h.inEscape && len(h.escBuffer) > 0 {
 				seq := string(h.escBuffer)
-				// Try Alt+key parsing (ESC followed by character)
-				if key, ok := h.parseAltSequence(seq); ok {
+				// Try Mega+key parsing (ESC followed by character)
+				if key, ok := h.parseMegaSequence(seq); ok {
 					h.emitKey(key)
 					h.escBuffer = nil
 					h.inEscape = false
@@ -734,7 +734,7 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 		//
 		// Without this, a lone Escape immediately followed by any sequence
 		// swallows both. The bytes accumulate as "\x1b\x1b[...", match no
-		// binding, are no valid prefix, fail parseModifiedCSI and the Alt
+		// binding, are no valid prefix, fail parseModifiedCSI and the Mega
 		// parsers, and fall through to emitEscapeBuffer -- which types the
 		// SECOND sequence's body out as literal characters. With mouse
 		// reporting on, pressing Escape while the pointer is over the window
@@ -745,7 +745,8 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 		// same read, so there is no gap to time out on.
 		if b == 0x1b {
 			// A second ESC while ONLY the first ESC is buffered is the head of
-			// an Alt/Meta-prefixed escape-sequence key: Option+arrow sends
+			// a Mega-prefixed escape-sequence key: the Option/Alt cap plus an
+			// arrow sends
 			// ESC + ESC[A. Keep buffering the double-ESC and let the resolver
 			// below decide — it parses ESC ESC [X as M-<arrow>, and a double-ESC
 			// that is NOT such a chord (a real Escape immediately followed by
@@ -804,7 +805,7 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			h.inAPC = true
 			h.apcBuffer = nil
 			h.apcEsc = false
-			// ESC _ is also how a terminal reports Alt+_, so this cannot
+			// ESC _ is also how a terminal reports Mega+_, so this cannot
 			// simply commit to APC and wait: an unterminated one is given
 			// back as that key (see abandonAPC).
 			escTimeout.Reset(escapeTimeout)
@@ -838,8 +839,8 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			return
 		}
 
-		// Try Alt+key parsing (ESC followed by character)
-		if key, ok := h.parseAltSequence(seq); ok {
+		// Try Mega+key parsing (ESC followed by character)
+		if key, ok := h.parseMegaSequence(seq); ok {
 			h.emitKey(key)
 			h.escBuffer = nil
 			h.inEscape = false
@@ -847,7 +848,7 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			return
 		}
 
-		// A double-ESC that did not resolve as an Alt chord (Alt+arrow is
+		// A double-ESC that did not resolve as a Mega chord (Mega+arrow is
 		// handled by parseModifiedCSI above) is a real Escape immediately
 		// followed by another sequence — classically Escape pressed while mouse
 		// tracking put a report in the same read. Emit the standalone Escape and
@@ -1103,7 +1104,7 @@ func (h *Handler) finishAPC() {
 }
 
 // abandonAPC gives up on an APC that never terminated and hands the input
-// back the way it would have arrived before: ESC _ as the Alt+_ key, then
+// back the way it would have arrived before: ESC _ as the Mega+_ key, then
 // whatever was accumulated as ordinary input. Typing must never be swallowed
 // by a reply that turned out not to be one.
 func (h *Handler) abandonAPC(escTimeout *time.Timer) {
@@ -1111,7 +1112,7 @@ func (h *Handler) abandonAPC(escTimeout *time.Timer) {
 	h.inAPC = false
 	h.apcBuffer = nil
 	h.apcEsc = false
-	if key, ok := h.parseAltSequence(apcStart); ok {
+	if key, ok := h.parseMegaSequence(apcStart); ok {
 		h.emitKey(key)
 	}
 	for _, b := range body {
@@ -1373,13 +1374,13 @@ func (h *Handler) debug(msg string) {
 	}
 }
 
-// parseAltSequence detects M- prefix for alt combinations
-func (h *Handler) parseAltSequence(seq string) (string, bool) {
-	// ESC followed by a character = Alt+char (Meta prefix)
+// parseMegaSequence detects the M- prefix for Mega combinations
+func (h *Handler) parseMegaSequence(seq string) (string, bool) {
+	// ESC followed by a character = Mega+char
 	if len(seq) == 2 && seq[0] == 0x1b {
 		char := seq[1]
-		// A trailing ESC is not Alt+Escape: ESC ESC is a double Escape (or the
-		// head of an Alt+arrow, resolved before this) — never M-Escape.
+		// A trailing ESC is not Mega+Escape: ESC ESC is a double Escape (or the
+		// head of a Mega+arrow, resolved before this) — never M-Escape.
 		if char == 0x1b {
 			return "", false
 		}
@@ -1665,10 +1666,10 @@ func modifierPrefix(mod int) string {
 		prefix += "C-" // ctrl
 	}
 	if mod&2 != 0 {
-		prefix += "M-" // alt, which is the Meta a PC keyboard induces
+		prefix += "M-" // mega
 	}
 	if mod&32 != 0 {
-		prefix += "m-" // meta proper, a key most keyboards do not have
+		prefix += "m-" // micro, a key most keyboards do not have
 	}
 	if mod&1 != 0 {
 		prefix += "S-" // shift
@@ -1909,19 +1910,26 @@ type modifierKeyInfo struct {
 
 // Kitty protocol modifier keys (for press/release events)
 // Left modifiers are 57441-57446, Right modifiers are 57447-57452
+//
+// The names are this vocabulary's, not the protocol's. Kitty calls 57443 "alt"
+// and 57446 "meta"; here they are Mega and Micro, because both keys have a
+// genuine claim to the name Meta and neither may take it — Emacs and the PC
+// keyboard call the first one Meta, X11 and the Space Cadet call the second
+// one Meta, and they are each right about their own lineage. Splitting by the
+// case of the prefix settles it: capital M is Mega, lowercase m is Micro.
 var kittyModifierKeys = map[int]modifierKeyInfo{
 	57441: {"Shift", "Left"},
 	57442: {"Ctrl", "Left"},
-	57443: {"Alt", "Left"},
+	57443: {"Mega", "Left"},
 	57444: {"Super", "Left"},
 	57445: {"Hyper", "Left"},
-	57446: {"Meta", "Left"},
+	57446: {"Micro", "Left"},
 	57447: {"Shift", "Right"},
 	57448: {"Ctrl", "Right"},
-	57449: {"Alt", "Right"},
+	57449: {"Mega", "Right"},
 	57450: {"Super", "Right"},
 	57451: {"Hyper", "Right"},
-	57452: {"Meta", "Right"},
+	57452: {"Micro", "Right"},
 }
 
 // parseKittyProtocol handles CSI keycode ; modifiers : event_type u format
@@ -1957,19 +1965,27 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 
 	// Check if this is a modifier key press/release
 	if modKeyInfo, ok := kittyModifierKeys[keycode]; ok {
-		// Map modifier names to our prefix convention
+		// Map modifier names to our prefix convention.
+		//
+		// These are the same letters the modifier PREFIXES use, and they have to
+		// be: a consumer that knows "M-" reads Mega must not meet a second
+		// spelling for the same key here. Two letters were wrong. Mega emitted
+		// "A", a prefix this vocabulary does not have — key-sequence-processor
+		// has no rank for "A-" and a test asserting it never gains one, so those
+		// events could never match a binding. And Micro emitted "M", taking the
+		// letter that belongs to Mega.
 		var prefix string
 		switch modKeyInfo.name {
 		case "Shift":
 			prefix = "S"
 		case "Ctrl":
 			prefix = "C"
-		case "Alt":
-			prefix = "A"
+		case "Mega":
+			prefix = "M"
 		case "Super":
 			prefix = "s"
-		case "Meta":
-			prefix = "M"
+		case "Micro":
+			prefix = "m"
 		case "Hyper":
 			prefix = "H"
 		}
@@ -2093,7 +2109,7 @@ func formatLetterKey(letter byte, mod int) string {
 	mod--
 
 	hasShift := mod&1 != 0
-	hasAlt := mod&2 != 0
+	hasMega := mod&2 != 0
 	hasCtrl := mod&4 != 0
 	hasSuper := mod&8 != 0
 	hasHyper := mod&16 != 0
@@ -2121,7 +2137,7 @@ func formatLetterKey(letter byte, mod int) string {
 	// Canonical order. The caret already sits against the letter, so every
 	// other modifier precedes it in rank: M- m- S- s- H- ^A.
 	prefix := ""
-	if hasAlt {
+	if hasMega {
 		prefix += "M-"
 	}
 	if hasMeta {
@@ -2192,7 +2208,7 @@ func formatSymbolKey(symbol byte, mod int) string {
 	mod--
 
 	hasShift := mod&1 != 0
-	hasAlt := mod&2 != 0
+	hasMega := mod&2 != 0
 	hasCtrl := mod&4 != 0
 	hasSuper := mod&8 != 0
 
@@ -2214,7 +2230,7 @@ func formatSymbolKey(symbol byte, mod int) string {
 	if hasSuper {
 		prefix += "s-"
 	}
-	if hasAlt {
+	if hasMega {
 		prefix += "M-"
 	}
 
@@ -2229,7 +2245,7 @@ func formatNumberKey(number byte, mod int) string {
 	mod--
 
 	hasShift := mod&1 != 0
-	hasAlt := mod&2 != 0
+	hasMega := mod&2 != 0
 	hasCtrl := mod&4 != 0
 	hasSuper := mod&8 != 0
 
@@ -2251,7 +2267,7 @@ func formatNumberKey(number byte, mod int) string {
 	if hasSuper {
 		prefix += "s-"
 	}
-	if hasAlt {
+	if hasMega {
 		prefix += "M-"
 	}
 
@@ -2312,7 +2328,7 @@ func parseMouseX10(seq string) (string, string, bool) {
 func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
 	// Decode modifiers from button code
 	hasShift := (cb & 4) != 0
-	hasAlt := (cb & 8) != 0
+	hasMega := (cb & 8) != 0
 	hasCtrl := (cb & 16) != 0
 
 	// Build modifier prefix
@@ -2320,7 +2336,7 @@ func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
 	if hasShift {
 		prefix += "S-"
 	}
-	if hasAlt {
+	if hasMega {
 		prefix += "M-"
 	}
 	if hasCtrl {

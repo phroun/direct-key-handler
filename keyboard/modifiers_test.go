@@ -16,7 +16,7 @@ func TestModifierPrefixDecodesEveryBit(t *testing.T) {
 	}{
 		{"none", 0, ""},
 		{"shift", 1, "S-"},
-		{"alt", 2, "M-"},
+		{"mega", 2, "M-"},
 		{"ctrl", 4, "C-"},
 		{"super", 8, "s-"},
 		{"hyper", 16, "H-"},
@@ -37,11 +37,11 @@ func TestModifierPrefixCanonicalOrder(t *testing.T) {
 		bits int
 		want string
 	}{
-		{1 | 2, "M-S-"},       // shift+alt, NOT "S-M-"
+		{1 | 2, "M-S-"},       // shift+mega, NOT "S-M-"
 		{1 | 4, "C-S-"},       // shift+ctrl
-		{2 | 4, "C-M-"},       // alt+ctrl
+		{2 | 4, "C-M-"},       // mega+ctrl
 		{1 | 8, "S-s-"},       // shift+super
-		{1 | 2 | 4, "C-M-S-"}, // ctrl+alt+shift
+		{1 | 2 | 4, "C-M-S-"}, // ctrl+mega+shift
 		{1 | 2 | 4 | 8, "C-M-S-s-"},
 		{16 | 32, "m-H-"}, // meta+hyper
 		{1 | 16, "S-H-"},  // shift+hyper
@@ -66,10 +66,10 @@ func TestControlSpellingFollowsTheBaseKey(t *testing.T) {
 	}{
 		{"ctrl", 4, "^A"},
 		{"ctrl+shift", 4 | 1, "S-^A"},
-		{"ctrl+alt", 4 | 2, "M-^A"},
-		{"ctrl+alt+shift", 4 | 2 | 1, "M-S-^A"},
+		{"ctrl+mega", 4 | 2, "M-^A"},
+		{"ctrl+mega+shift", 4 | 2 | 1, "M-S-^A"},
 		{"ctrl+super", 4 | 8, "s-^A"},
-		{"ctrl+alt+super", 4 | 2 | 8, "M-s-^A"},
+		{"ctrl+mega+super", 4 | 2 | 8, "M-s-^A"},
 		{"ctrl+hyper", 4 | 16, "H-^A"},
 		{"ctrl+meta", 4 | 32, "m-^A"},
 		{"everything", 4 | 2 | 1 | 8 | 16 | 32, "M-m-S-s-H-^A"},
@@ -77,8 +77,8 @@ func TestControlSpellingFollowsTheBaseKey(t *testing.T) {
 		// No Control: Shift is carried by the letter's own case.
 		{"plain", 0, "a"},
 		{"shift", 1, "A"},
-		{"alt", 2, "M-a"},
-		{"alt+shift", 2 | 1, "M-A"},
+		{"mega", 2, "M-a"},
+		{"mega+shift", 2 | 1, "M-A"},
 	} {
 		if got := formatLetterKey(a, c.bits+1); got != c.want {
 			t.Errorf("%s: formatLetterKey = %q, want %q", c.name, got, c.want)

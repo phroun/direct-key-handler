@@ -85,11 +85,11 @@ func TestAPCBodyIsCapped(t *testing.T) {
 	}
 }
 
-// ESC _ is equally how a terminal reports Alt+_ typed by hand. An APC that
+// ESC _ is equally how a terminal reports Mega+_ typed by hand. An APC that
 // never terminates is therefore not one, and must be given back as that key
 // with everything after it intact -- swallowing a keystroke, and then the
 // typing that follows it, would be a far worse bug than missing a reply.
-func TestUnterminatedAPCFallsBackToAltUnderscore(t *testing.T) {
+func TestUnterminatedAPCFallsBackToMegaUnderscore(t *testing.T) {
 	got := feedKeys(t, "\x1b_")
 	if len(got) != 1 || got[0] != "M-_" {
 		t.Errorf("bare ESC _ -> %v, want [M-_]", got)
@@ -97,7 +97,7 @@ func TestUnterminatedAPCFallsBackToAltUnderscore(t *testing.T) {
 }
 
 // ...and the typing after it still arrives, in order.
-func TestTypingAfterAltUnderscoreSurvives(t *testing.T) {
+func TestTypingAfterMegaUnderscoreSurvives(t *testing.T) {
 	pr, pw := io.Pipe()
 	f := false
 	h := New(Options{InputReader: pr, ManageTerminal: &f})

@@ -195,9 +195,11 @@ func AllKeys() []Key {
 // name. Renaming splits them off and puts them back, so an override applies to
 // "M-PageUp" as readily as to "PageUp".
 //
-// There is no "A-": the PC Alt key induces Meta, which is spelled "M-". "m-"
-// is Meta proper — a separate key most keyboards do not have, which the kitty
-// protocol reports on its own bit.
+// There is no "A-". "M-" is Mega and "m-" is Micro: two modifiers that both
+// have a real claim to the name Meta, so neither is given it and they split by
+// the case of their prefix instead. Mega is the one Emacs calls Meta, which a
+// PC keyboard puts under the Alt cap; Micro is the one X11 and the Space Cadet
+// call Meta, which the kitty protocol reports on its own bit.
 var namePrefixes = []string{"S-", "M-", "m-", "C-", "s-", "H-", "G-"}
 
 // nameSuffixes are the event/side suffixes that can trail a base name.
