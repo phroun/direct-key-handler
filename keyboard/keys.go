@@ -259,9 +259,16 @@ func AllKeys() []Key {
 // "P-" and "p-" are the keypad, and they are prefixes for the same reason the
 // others are: the pad duplicates keys that exist elsewhere, so the prefix says
 // WHICH of the two was pressed without inventing a second name for every one.
-// The lowercase form is for the pad keys HID defines twice — there are two
-// keypad commas (133 and 140) and two keypad equals (103 and 134), so neither
-// can own the character outright and they split by case, as Mega and Micro do.
+// The lowercase form is for the pad characters that exist twice, so neither can
+// own the character outright and they split by case, as Mega and Micro do. Two
+// different pads are involved rather than two spellings of one key: an AS/400
+// column carries a comma and an equals at adjacent usages (133 KeypadComma,
+// 134 KeypadEqualSign), while an ordinary pad's equals is 103 and the PC-98
+// pad's comma is 140 — named International6, though a PC-9801 wears it as the
+// comma in the bottom row beside the 0 and the period. Which member of a pair
+// takes the lowercase form follows the key, not convenience: the separator the
+// kitty protocol reports descends from the DEC LK201's comma, in the column
+// above Enter, so that one is "p-," and the PC-98's is "P-,".
 var namePrefixes = []string{"S-", "M-", "m-", "C-", "s-", "H-", "G-", "P-", "p-"}
 
 // nameSuffixes are the event/side suffixes that can trail a base name.

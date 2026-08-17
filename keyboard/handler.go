@@ -1958,7 +1958,19 @@ var kittySpecialKeys = map[int]string{
 	57413: "P-+",
 	57414: "P-Enter", // the keypad's own, never the home row's Return
 	57415: "P-=",
-	57416: "p-,", // KP_SEPARATOR — see the note in the commit; provisional
+	// KP_SEPARATOR, and it is the LOWERCASE comma because of where that name
+	// comes from. kitty resolves this one from the xkb keysym rather than a
+	// scancode (glfw_key_for_sym: XKB_KEY_KP_Separator -> KP_SEPARATOR), and
+	// X11's keypad keysyms are the DEC LK201's pad almost one for one — KP_F1
+	// through KP_F4 exist for nothing but that keyboard's PF1-PF4, beside
+	// KP_Separator, KP_Decimal, KP_Subtract and KP_Enter. The LK201 wears its
+	// comma in the right-hand column directly above Enter, which is the same
+	// key an AS/400 column carries (HID 133 KeypadComma, next door to 134
+	// KeypadEqualSign) and the same one a modern USB pad puts beside the plus.
+	// So this is the archaic comma, and "P-," stays reserved for the PC-98's,
+	// which sits in the bottom row beside the 0 and the period and reaches HID
+	// as International6 (140).
+	57416: "p-,",
 	57417: "P-Left",
 	57418: "P-Right",
 	57419: "P-Up",

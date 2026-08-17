@@ -65,6 +65,10 @@ func TestNumLockPicksTheKeycodeAndBothAreRead(t *testing.T) {
 		{"\x1b[57412u", "P--"},
 		{"\x1b[57413u", "P-+"},
 		{"\x1b[57415u", "P-="},
+		// KP_SEPARATOR is the LOWERCASE comma. kitty resolves it from the xkb
+		// keysym, and X11's keypad keysyms are the DEC LK201's pad — which
+		// wears its comma in the right-hand column above Enter, the archaic
+		// one. "P-," is the PC-98's, in the bottom row beside the period.
 		{"\x1b[57416u", "p-,"},
 		// The 5 with the lock off is the one pad key that duplicates nothing
 		// elsewhere, so it is the one base name the pad needed of its own.
@@ -115,6 +119,63 @@ func TestKeypadCaretKeepsTheEventSuffix(t *testing.T) {
 	} {
 		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
 			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// Both pad prefixes split the same way, including the members no keycode
+// reaches.
+//
+// Where a pad character exists twice only ONE of the pair has a keycode: the
+// separator arrives as "p-," and the PC-98's "P-," does not arrive at all,
+// while equals goes the other way round — "P-=" arrives and "p-=" does not. A
+// byte feed can therefore only ever exercise half of this, so the split is
+// pinned where it lives. The host that eventually reads HID usage IDs should
+// find the rule already working rather than be the thing that tests it.
+func TestTheLowercasePadPrefixSplitsTheSameWay(t *testing.T) {
+	for _, tc := range []struct {
+		name, pad, shown string
+		ok               bool
+	}{
+		{"p-,", "p-", ",", true},
+		{"p-=", "p-", "=", true},
+		{"P-,", "P-", ",", true},
+		{"p-Enter", "", "", false},  // a name has no character for the caret
+		{"P-Begin", "", "", false},  // nor does this one
+		{"Home", "", "", false},     // and a non-pad name falls straight through
+		{"C-P-Home", "", "", false}, // a stacked prefix is peeled before this
+	} {
+		pad, shown, ok := splitPadShownKey(tc.name)
+		if ok != tc.ok || pad != tc.pad || shown != tc.shown {
+			t.Errorf("splitPadShownKey(%q) = %q, %q, %v; want %q, %q, %v",
+				tc.name, pad, shown, ok, tc.pad, tc.shown, tc.ok)
+		}
+	}
+}
+
+// An application's names reach through the lowercase pad prefix too.
+//
+// Renaming is driven off namePrefixes, and a prefix missing from that list is
+// never peeled — the base never reaches the name table and the application gets
+// this package's spelling instead. The only "p-" a decoder emits today is the
+// separator, whose base is a character with no name of its own, so a byte feed
+// cannot reach this at all. Pinned directly instead, for the same reason: the
+// emitter that arrives later should find the path already working.
+func TestNamesReachThroughTheLowercasePadPrefix(t *testing.T) {
+	f := false
+	h := New(Options{ManageTerminal: &f, KeyNames: map[Key]string{
+		KeyHome: "hm", KeyBegin: "mid", KeyKeypadEnter: "kpenter",
+	}})
+	for _, tc := range []struct{ in, want string }{
+		{"p-Home", "p-hm"},
+		{"p-Begin", "p-mid"},
+		{"C-p-Home", "C-p-hm"},
+		{"p-Enter:Release", "p-kpenter:Release"},
+		{"p-,", "p-,"},     // no name of its own; passes through untouched
+		{"P-Home", "P-hm"}, // and the uppercase form still works
+	} {
+		if got := h.displayKey(tc.in); got != tc.want {
+			t.Errorf("displayKey(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
