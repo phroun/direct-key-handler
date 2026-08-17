@@ -1388,13 +1388,24 @@ func (h *Handler) parseMegaSequence(seq string) (string, bool) {
 		if char == 0x1b {
 			return "", false
 		}
-		// Lowercase letters: M-a through M-z
-		if char >= 'a' && char <= 'z' {
+		// Letters: "M-a" lowercase, "M-X" upper. Case carries Shift here, the
+		// same as it does for every other shown key.
+		//
+		// This spelled the shifted form "M-S-x", and that invented a
+		// distinction the wire never made. ESC 'X' is two bytes, 0x1B 0x58,
+		// with no modifier field anywhere — the uppercase byte IS the whole of
+		// what the terminal said. Decomposing it into a prefix plus a
+		// lowercased base then spent that invention, and left "M-X" — the
+		// spelling this vocabulary uses for a shifted shown key everywhere
+		// else — unreachable on this path.
+		//
+		// Every shifted SYMBOL already arrived as itself: "%" is Shift+5 and
+		// comes through "M-%", "?" is Shift+/ and comes through "M-?". Letters
+		// were the sole exception. The macOS Option table in this file has
+		// spelled uppercase "M-A" from the beginning, and says why in a comment
+		// beside it.
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' {
 			return fmt.Sprintf("M-%c", char), true
-		}
-		// Uppercase letters: M-S-a through M-S-z (shift implied)
-		if char >= 'A' && char <= 'Z' {
-			return fmt.Sprintf("M-S-%c", char-'A'+'a'), true
 		}
 		// Numbers: M-0 through M-9
 		if char >= '0' && char <= '9' {
@@ -1469,23 +1480,27 @@ func (h *Handler) parseMegaSequence(seq string) (string, bool) {
 		case ' ':
 			return "M-Space", true
 		default:
-			// Special control characters
-			switch char {
-			case 0x09:
-				return "M-Tab", true
-			case 0x0D:
-				return "M-Enter", true
-			case 0x7F:
-				return "M-Backspace", true
-			case 0x08:
-				return "M-Backspace", true
-			case 0x1B:
-				return "M-Escape", true
-			}
-			// Other control characters: M-^A through M-^Z
-			if char >= 0x01 && char <= 0x1A {
-				letter := 'A' + char - 1
-				return fmt.Sprintf("M-^%c", letter), true
+			// A control byte under Mega is the name that byte already has, with
+			// the prefix in front. Reading controlKeys rather than restating it
+			// is the point: this was a hand-copied duplicate of that table plus
+			// a second copy of its ^A-^Z half, and it had DRIFTED.
+			//
+			// 0x7F said "M-Backspace" while the bare byte says "Delete", so
+			// M-Delete could not be produced at all — and Alt+Backspace, which
+			// is the delete-previous-word chord, arrives as ESC 0x7F from every
+			// terminal whose kbs is ^?, which is most of them. A keymap binding
+			// M-Delete never fired while M-Backspace answered for both
+			// keyboards: exactly the conflation naming the two bytes apart
+			// exists to prevent, reappearing as soon as a modifier was held.
+			//
+			// 0x0D said "M-Enter", and "Enter" is the KEYPAD's name — bare
+			// Enter is never emitted now, only "P-Enter". The home-row key is
+			// Return.
+			//
+			// Derived, the two cannot drift again: the Mega form IS the bare
+			// name with a prefix, by construction.
+			if name, ok := controlKeys[char]; ok {
+				return "M-" + name, true
 			}
 			// Any other printable ASCII character
 			if char >= 0x20 && char < 0x7f {
