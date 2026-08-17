@@ -407,7 +407,11 @@ var escBindings = map[string]string{
 	// CR cannot know which was struck. Without this entry the sequence decoded
 	// as three keystrokes — Escape, then O, then M — so the keypad's Enter was
 	// unreadable from any terminal that sent it.
-	"\x1bOM": "Enter",
+	//
+	// The rest of the application-keypad set (SS3 p-y for the digits, l/m/n for
+	// the punctuation) is still undecoded; when it arrives it belongs under the
+	// same "P-" prefix this one now carries.
+	"\x1bOM": "P-Enter",
 }
 
 // Control key names
@@ -425,7 +429,7 @@ var controlKeys = map[byte]string{
 	10: "^J",        // Ctrl-J (LF) - distinct from Enter
 	11: "^K",
 	12: "^L",
-	13: "Return", // Ctrl-M (CR) - the home-row key; the keypad's is "Enter"
+	13: "Return", // Ctrl-M (CR) - the home-row key; the keypad's is "P-Enter"
 	14: "^N",
 	15: "^O",
 	16: "^P",
@@ -1924,19 +1928,48 @@ var kittySpecialKeys = map[int]string{
 	57381: "F18",
 	57382: "F19",
 	57383: "F20",
-	// Keypad
-	57414: "Enter", // KP_Enter - the keypad key, distinct from Return (13)
-	// Navigation
-	57417: "Up",
-	57418: "Down",
-	57419: "Left",
-	57420: "Right",
-	57421: "PageUp",
-	57422: "PageDown",
-	57423: "Home",
-	57424: "End",
-	57425: "Insert",
-	57426: "FDel", // forward delete; the erase-left key is 127 above
+	// The KEYPAD, every key of it, under the "P-" prefix.
+	//
+	// This block was wrong twice over. It named ten keypad keys as though they
+	// were the main cluster — so keypad Home could not be told from Home — and
+	// it had the arrows ROTATED, because 57417 is KP_LEFT and this called it
+	// "Up", 57419 is KP_UP and this called it "Left". A keypad arrow moved the
+	// cursor ninety degrees from where it pointed.
+	//
+	// The pad is a modal duplicate of keys that exist elsewhere, so the prefix
+	// says which one was pressed rather than inventing twenty names. And the
+	// duplication runs the other way too: kitty reports 57406 for the 7 with
+	// NumLock ON and 57423 for the same key with it OFF, which is exactly the
+	// rule — the number when it is locked, the named action when it is not.
+	57399: "P-0",
+	57400: "P-1",
+	57401: "P-2",
+	57402: "P-3",
+	57403: "P-4",
+	57404: "P-5",
+	57405: "P-6",
+	57406: "P-7",
+	57407: "P-8",
+	57408: "P-9",
+	57409: "P-.",
+	57410: "P-/",
+	57411: "P-*",
+	57412: "P--",
+	57413: "P-+",
+	57414: "P-Enter", // the keypad's own, never the home row's Return
+	57415: "P-=",
+	57416: "p-,", // KP_SEPARATOR — see the note in the commit; provisional
+	57417: "P-Left",
+	57418: "P-Right",
+	57419: "P-Up",
+	57420: "P-Down",
+	57421: "P-PageUp",
+	57422: "P-PageDown",
+	57423: "P-Home",
+	57424: "P-End",
+	57425: "P-Insert",
+	57426: "P-Delete", // the pad's own erase, not the erase-left key at 127
+	57427: "P-Begin",  // the 5 with NumLock off; duplicates nothing elsewhere
 }
 
 // modifierKeyInfo holds modifier name and side (Left/Right)
@@ -2134,8 +2167,41 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 		return baseName + eventSuffix, true
 	}
 
+	// Control on a SHOWN keypad key takes the caret, written against the
+	// character the key shows: Ctrl on the pad's 7 is "P-^7", not "C-P-7".
+	// That is how this vocabulary spells Control for a key that is shown
+	// rather than named — the main number row already does it in
+	// formatNumberKey — and the pad prefix sits outside the caret, which is
+	// where the canonical order puts it (C- G- M- m- S- s- H- P- p- ^Key).
+	//
+	// A NAMED pad key keeps "C-", because a name has no character for the
+	// caret to sit against: "C-P-Home", not "P-^Home".
+	if pad, shown, isShown := splitPadShownKey(baseName); isShown && (mod-1)&4 != 0 {
+		withoutCtrl := modifierPrefix(((mod - 1) &^ 4) + 1)
+		return withoutCtrl + pad + "^" + shown + eventSuffix, true
+	}
+
 	prefix := modifierPrefix(mod)
 	return prefix + baseName + eventSuffix, true
+}
+
+// splitPadShownKey separates a keypad name into its prefix and the character
+// the key shows, reporting false for a pad key that is NAMED rather than shown.
+//
+// The test is the remainder's length: every shown pad key is one character
+// (a digit, ".", "/", "*", "-", "+", "=", ","), and every named one is a word
+// (Home, Enter, Begin, Delete). Nothing else in the table starts with a pad
+// prefix, so a non-pad name falls straight through.
+func splitPadShownKey(name string) (pad, shown string, ok bool) {
+	for _, p := range []string{"P-", "p-"} {
+		if rest, found := strings.CutPrefix(name, p); found {
+			if len([]rune(rest)) == 1 {
+				return p, rest, true
+			}
+			return "", "", false
+		}
+	}
+	return "", "", false
 }
 
 // formatLetterKey formats a letter key with modifiers

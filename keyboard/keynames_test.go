@@ -65,9 +65,12 @@ func TestKeyNamesRenameOnEmit(t *testing.T) {
 func TestKeyNamesKeepPrefixAndSuffix(t *testing.T) {
 	names := map[Key]string{KeyPageUp: "pgup", KeyLeft: "left"}
 	cases := []struct{ raw, want string }{
-		{"\x1b[5;3~", "M-pgup"},             // legacy modified tilde
-		{"\x1b[1;5D", "C-left"},             // legacy modified cursor key
-		{"\x1b[57421;1:3u", "pgup:Release"}, // kitty, with an event suffix
+		{"\x1b[5;3~", "M-pgup"}, // legacy modified tilde
+		{"\x1b[1;5D", "C-left"}, // legacy modified cursor key
+		// kitty, with an event suffix. 57421 is the KEYPAD's PageUp, so the
+		// pad prefix stays in front of the renamed base, exactly as "M-" does.
+		{"\x1b[57421;1:3u", "P-pgup:Release"},
+		{"\x1b[5;1:3~", "pgup:Release"}, // and the main cluster's, unprefixed
 	}
 	for _, c := range cases {
 		got := feedKeysNamed(t, c.raw, names)
@@ -105,8 +108,8 @@ func TestKeyNamesDefaultUnchanged(t *testing.T) {
 func TestBothEnterKeysAreReadable(t *testing.T) {
 	for _, c := range []struct{ raw, want, what string }{
 		{"\r", "Return", "CR is the home-row key"},
-		{"\x1bOM", "Enter", "SS3 M is the keypad's, in application keypad mode"},
-		{"\x1b[57414u", "Enter", "and the kitty protocol reports it by keycode"},
+		{"\x1bOM", "P-Enter", "SS3 M is the keypad's, in application keypad mode"},
+		{"\x1b[57414u", "P-Enter", "and the kitty protocol reports it by keycode"},
 		{"\x1b[13u", "Return", "as it does the home-row key"},
 	} {
 		got := feedKeys(t, c.raw)
@@ -198,16 +201,20 @@ func TestReturnAndKeypadEnterAreDistinct(t *testing.T) {
 	if got := feedKeys(t, "\r"); len(got) != 1 || got[0] != "Return" {
 		t.Errorf("CR -> %v, want [Return]", got)
 	}
-	if got := feedKeys(t, "\x1b[57414u"); len(got) != 1 || got[0] != "Enter" {
-		t.Errorf("KP_Enter -> %v, want [Enter]", got)
+	if got := feedKeys(t, "\x1b[57414u"); len(got) != 1 || got[0] != "P-Enter" {
+		t.Errorf("KP_Enter -> %v, want [P-Enter]", got)
 	}
 
+	// Folding the two together is still the application's choice to make; the
+	// pad prefix rides in front of whatever name it picks, and an application
+	// that wants the two truly indistinguishable falls "P-" back to nothing in
+	// its keymap rather than here.
 	folded := map[Key]string{KeyReturn: "return", KeyKeypadEnter: "return"}
 	if got := feedKeysNamed(t, "\r", folded); len(got) != 1 || got[0] != "return" {
 		t.Errorf("folded CR -> %v, want [return]", got)
 	}
-	if got := feedKeysNamed(t, "\x1b[57414u", folded); len(got) != 1 || got[0] != "return" {
-		t.Errorf("folded KP_Enter -> %v, want [return]", got)
+	if got := feedKeysNamed(t, "\x1b[57414u", folded); len(got) != 1 || got[0] != "P-return" {
+		t.Errorf("folded KP_Enter -> %v, want [P-return]", got)
 	}
 }
 

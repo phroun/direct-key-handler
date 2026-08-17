@@ -1,0 +1,191 @@
+package keyboard
+
+import (
+	"testing"
+)
+
+// The keypad arrows pointed the wrong way.
+//
+// 57417 is KP_LEFT and this table called it "Up"; 57419 is KP_UP and it called
+// that "Left". The whole block was rotated, so a keypad arrow moved the cursor
+// ninety degrees from the direction printed on the cap — and silently, because
+// every name it produced was a real name that a keymap would happily bind.
+func TestKeypadArrowsPointWhereTheCapSays(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"\x1b[57417u", "P-Left"},
+		{"\x1b[57418u", "P-Right"},
+		{"\x1b[57419u", "P-Up"},
+		{"\x1b[57420u", "P-Down"},
+	} {
+		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// A keypad key is told apart from the main-cluster key it duplicates.
+//
+// The pad is a modal double of keys that already exist: it has its own Home,
+// its own Enter, its own arrows, its own erase. Naming them "Home" and "Enter"
+// made the two physically distinct keys arrive under one name, so an
+// application could not bind them apart even though the terminal had told it
+// exactly which was pressed. The prefix says which one, and costs no new names.
+func TestKeypadKeysAreDistinctFromTheMainCluster(t *testing.T) {
+	for _, tc := range []struct{ raw, want, what string }{
+		{"\x1b[57423u", "P-Home", "the pad's Home"},
+		{"\x1b[1~", "Home", "and the main cluster's, which keeps the bare name"},
+		{"\x1b[57414u", "P-Enter", "the pad's Enter"},
+		{"\r", "Return", "and the home row's Return, a different key"},
+		{"\x1b[57426u", "P-Delete", "the pad's erase, a pad action"},
+		{"\x1b[3~", "FDel", "and forward delete, which is not it"},
+		{"\x7f", "Delete", "and the erase-left key, which is also not it"},
+		{"\x1b[57425u", "P-Insert", ""},
+		{"\x1b[57421u", "P-PageUp", ""},
+		{"\x1b[57422u", "P-PageDown", ""},
+		{"\x1b[57424u", "P-End", ""},
+	} {
+		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%q (%s) parsed as %v, want [%s]", tc.raw, tc.what, got, tc.want)
+		}
+	}
+}
+
+// NumLock is already decided by the time the keycode arrives, and the two
+// answers are two different keycodes for the one physical key: 57406 is the
+// pad's 7 with the lock on, 57423 is the same key's Home with it off. Reading
+// both is what lets an application bind either without tracking lock state.
+func TestNumLockPicksTheKeycodeAndBothAreRead(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"\x1b[57399u", "P-0"},
+		{"\x1b[57406u", "P-7"}, // KP_0 is 57399, so the 7 is 57406
+		{"\x1b[57408u", "P-9"},
+		{"\x1b[57409u", "P-."},
+		{"\x1b[57410u", "P-/"},
+		{"\x1b[57411u", "P-*"},
+		{"\x1b[57412u", "P--"},
+		{"\x1b[57413u", "P-+"},
+		{"\x1b[57415u", "P-="},
+		{"\x1b[57416u", "p-,"},
+		// The 5 with the lock off is the one pad key that duplicates nothing
+		// elsewhere, so it is the one base name the pad needed of its own.
+		{"\x1b[57427u", "P-Begin"},
+		{"\x1b[57404u", "P-5"},
+	} {
+		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// Control on a SHOWN pad key takes the caret, the same as anywhere else.
+//
+// A shown key IS its character, and Control against a character is written
+// "^7" throughout this vocabulary. Emitting "C-P-7" would have invented a
+// spelling nothing reads: the main number row already produces "^7", so the
+// pad's 7 under Control would have been unbindable alongside it. A NAMED pad
+// key keeps "C-", because a name has no character for the caret to sit against.
+func TestControlOnAShownKeypadKeyTakesTheCaret(t *testing.T) {
+	for _, tc := range []struct{ raw, want, what string }{
+		{"\x1b[57406;5u", "P-^7", "control on a shown pad key"},
+		{"\x1b[57406;6u", "S-P-^7", "shift keeps its prefix, ahead of the pad's"},
+		{"\x1b[57412;5u", "P-^-", "and punctuation is shown too"},
+		{"\x1b[57416;5u", "p-^,", "the lowercase pad prefix behaves the same"},
+		{"\x1b[57423;5u", "C-P-Home", "but a named pad key keeps C-"},
+		{"\x1b[57414;5u", "C-P-Enter", ""},
+		{"\x1b[57427;5u", "C-P-Begin", ""},
+		// Without Control the shown key is just itself under the prefix.
+		{"\x1b[57406;2u", "S-P-7", "shift alone leaves the character alone"},
+		{"\x1b[57406;3u", "M-P-7", "and so does Mega"},
+	} {
+		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%q (%s) parsed as %v, want [%s]", tc.raw, tc.what, got, tc.want)
+		}
+	}
+}
+
+// The event type rides in the modifier field, and the caret path must hand it
+// back on rather than dropping it — a release that arrives spelled as a press
+// is a key that never comes up.
+func TestKeypadCaretKeepsTheEventSuffix(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"\x1b[57406;5:3u", "P-^7:Release"},
+		{"\x1b[57406;5:2u", "P-^7:Repeat"},
+		{"\x1b[57423;5:3u", "C-P-Home:Release"},
+		{"\x1b[57406;1:3u", "P-7:Release"},
+	} {
+		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// Renaming reaches through the pad prefix, as it does through every other one.
+// An application that calls Home "hm" gets "P-hm" for the pad's, without having
+// to know that a pad prefix exists.
+func TestApplicationNamesApplyUnderThePadPrefix(t *testing.T) {
+	names := map[Key]string{
+		KeyHome:        "hm",
+		KeyBegin:       "mid",
+		KeyKeypadEnter: "kpenter",
+	}
+	for _, tc := range []struct{ raw, want string }{
+		{"\x1b[57423u", "P-hm"},
+		{"\x1b[57423;5u", "C-P-hm"},
+		{"\x1b[57427u", "P-mid"},
+		{"\x1b[57414u", "P-kpenter"},
+		{"\x1b[1~", "hm"}, // the main cluster's, renamed by the same entry
+	} {
+		if got := feedKeysNamed(t, tc.raw, names); len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// The keys an American keyboard does not have still need names, because their
+// characters are already spoken for.
+//
+// A shown key normally IS its character, and that works only because the
+// character names a position on the US grid. HID 100 prints "<" and ">" on a
+// German board — characters that belong to Shift+comma and Shift+period — and
+// 135 and 137 print "\" and "|", which belong to the key at HID 49. Left as
+// characters they would collide with keys that already exist, so a keymap
+// could not tell the positions apart. These names are what it binds instead.
+func TestKeysWithNoAmericanCharacterAreNameable(t *testing.T) {
+	for _, tc := range []struct {
+		key  Key
+		want string
+	}{
+		{KeyZig, "Zig"},           // ISO, beside Return (HID 50)
+		{KeyZag, "Zag"},           // ISO, between LeftShift and Z (HID 100)
+		{KeyRo, "Ro"},             // JIS, beside RightShift (HID 135)
+		{KeyYen, "Yen"},           // JIS, beside Delete (HID 137)
+		{KeyKanaLock, "KanaLock"}, // HID 136
+		{KeyHangulLock, "HangulLock"},
+		{KeyHenkan, "Henkan"},     // converts the pending kana
+		{KeyMuhenkan, "Muhenkan"}, // commits it unconverted
+		{KeyHanja, "Hanja"},       // converts the preceding Hangul
+		{KeyBegin, "Begin"},
+	} {
+		if got := tc.key.DefaultName(); got != tc.want {
+			t.Errorf("DefaultName() = %q, want %q", got, tc.want)
+		}
+		if _, ok := keyByDefaultName[tc.want]; !ok {
+			t.Errorf("%q does not resolve back to a Key, so an application "+
+				"could not override it", tc.want)
+		}
+	}
+
+	// AllKeys is what an application iterates to prove its own table is
+	// complete, so a key missing from it is a key that reaches the application
+	// under this package's spelling with nobody noticing.
+	inAll := make(map[Key]bool, len(defaultKeyNames))
+	for _, k := range AllKeys() {
+		inAll[k] = true
+	}
+	for _, k := range []Key{KeyZig, KeyZag, KeyRo, KeyYen, KeyKanaLock,
+		KeyHangulLock, KeyHenkan, KeyMuhenkan, KeyHanja, KeyBegin} {
+		if !inAll[k] {
+			t.Errorf("%v is missing from AllKeys()", k)
+		}
+	}
+}

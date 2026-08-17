@@ -103,6 +103,36 @@ const (
 	KeyF19
 	KeyF20
 
+	// KeyBegin is the keypad's 5 with NumLock off. It is the one key on the
+	// pad that duplicates nothing elsewhere — X11 calls it KP_Begin, kitty
+	// KP_BEGIN — so it is the only base name the pad needed of its own.
+	KeyBegin
+
+	// Keys the American keyboard does not have, and which therefore have no
+	// character token to arrive under.
+	//
+	// A shown key normally IS its character, and that works because the
+	// character names a position on the US grid. These keys have no position
+	// on that grid, so their characters are already spoken for: 100 prints
+	// "<" and ">" on a German board, which belong to Shift+comma and
+	// Shift+period; 135 and 137 print "\" and "|", which belong to the key at
+	// 49. Naming them is the only way a keymap can tell those positions apart.
+	KeyZig // ISO, beside Return (HID 50)
+	KeyZag // ISO, between LeftShift and Z (HID 100)
+	KeyRo  // JIS, beside RightShift (HID 135)
+	KeyYen // JIS, beside Delete (HID 137)
+
+	// The input-method keys, which come in two kinds. KanaLock and HangulLock
+	// LATCH a mode, so they are named for the lock they are — the same shape
+	// as CapsLock, whose state this package likewise does not surface as a
+	// prefix. The other three fire once: Henkan converts the pending kana,
+	// Muhenkan commits it unconverted, Hanja converts the preceding Hangul.
+	KeyKanaLock   // HID 136
+	KeyHangulLock // HID 144
+	KeyHenkan     // HID 138
+	KeyMuhenkan   // HID 139
+	KeyHanja      // HID 145
+
 	keyMax // sentinel; keep last
 )
 
@@ -157,6 +187,19 @@ var defaultKeyNames = map[Key]string{
 	KeyF18: "F18",
 	KeyF19: "F19",
 	KeyF20: "F20",
+
+	KeyBegin: "Begin",
+
+	KeyZig: "Zig",
+	KeyZag: "Zag",
+	KeyRo:  "Ro",
+	KeyYen: "Yen",
+
+	KeyKanaLock:   "KanaLock",
+	KeyHangulLock: "HangulLock",
+	KeyHenkan:     "Henkan",
+	KeyMuhenkan:   "Muhenkan",
+	KeyHanja:      "Hanja",
 }
 
 // keyByDefaultName is the reverse of defaultKeyNames: it turns the base name a
@@ -213,7 +256,13 @@ func AllKeys() []Key {
 // the case of their prefix instead. Mega is the one Emacs calls Meta, which a
 // PC keyboard puts under the Alt cap; Micro is the one X11 and the Space Cadet
 // call Meta, which the kitty protocol reports on its own bit.
-var namePrefixes = []string{"S-", "M-", "m-", "C-", "s-", "H-", "G-"}
+// "P-" and "p-" are the keypad, and they are prefixes for the same reason the
+// others are: the pad duplicates keys that exist elsewhere, so the prefix says
+// WHICH of the two was pressed without inventing a second name for every one.
+// The lowercase form is for the pad keys HID defines twice — there are two
+// keypad commas (133 and 140) and two keypad equals (103 and 134), so neither
+// can own the character outright and they split by case, as Mega and Micro do.
+var namePrefixes = []string{"S-", "M-", "m-", "C-", "s-", "H-", "G-", "P-", "p-"}
 
 // nameSuffixes are the event/side suffixes that can trail a base name.
 var nameSuffixes = []string{":Release", ":Repeat", ":Left", ":Right"}
