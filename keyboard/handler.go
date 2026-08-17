@@ -1388,13 +1388,24 @@ func (h *Handler) parseMegaSequence(seq string) (string, bool) {
 		if char == 0x1b {
 			return "", false
 		}
-		// Lowercase letters: M-a through M-z
-		if char >= 'a' && char <= 'z' {
+		// Letters: "M-a" lowercase, "M-X" upper. Case carries Shift here, the
+		// same as it does for every other shown key.
+		//
+		// This spelled the shifted form "M-S-x", and that invented a
+		// distinction the wire never made. ESC 'X' is two bytes, 0x1B 0x58,
+		// with no modifier field anywhere — the uppercase byte IS the whole of
+		// what the terminal said. Decomposing it into a prefix plus a
+		// lowercased base then spent that invention, and left "M-X" — the
+		// spelling this vocabulary uses for a shifted shown key everywhere
+		// else — unreachable on this path.
+		//
+		// Every shifted SYMBOL already arrived as itself: "%" is Shift+5 and
+		// comes through "M-%", "?" is Shift+/ and comes through "M-?". Letters
+		// were the sole exception. The macOS Option table in this file has
+		// spelled uppercase "M-A" from the beginning, and says why in a comment
+		// beside it.
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' {
 			return fmt.Sprintf("M-%c", char), true
-		}
-		// Uppercase letters: M-S-a through M-S-z (shift implied)
-		if char >= 'A' && char <= 'Z' {
-			return fmt.Sprintf("M-S-%c", char-'A'+'a'), true
 		}
 		// Numbers: M-0 through M-9
 		if char >= '0' && char <= '9' {

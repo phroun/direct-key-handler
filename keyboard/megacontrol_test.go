@@ -121,10 +121,15 @@ func TestPrintablesUnderMegaAreUnchanged(t *testing.T) {
 		{"\x1b5", "M-5"},
 		{"\x1b-", "M--"},
 		{"\x1b/", "M-/"},
-		// An uppercase letter states Shift as a prefix and lowercases the
-		// base. That is this path's existing convention, not a consequence of
-		// anything here, and it is pinned so a change to it is deliberate.
-		{"\x1bX", "M-S-x"},
+		// An uppercase letter carries Shift in its CASE, as every other shown
+		// key does. This said "M-S-x", decomposing a distinction the wire never
+		// made: ESC 'X' is two bytes, 0x1B 0x58, with no modifier field
+		// anywhere, so the uppercase byte is the whole report. Every shifted
+		// symbol on this path already arrived as itself — "%" for Shift+5, "?"
+		// for Shift+/ — and letters were the only exception.
+		{"\x1bX", "M-X"},
+		{"\x1b%", "M-%"}, // the symbol beside it, which was always right
+		{"\x1b?", "M-?"},
 	} {
 		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
 			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
@@ -139,14 +144,36 @@ func TestPrintablesUnderMegaAreUnchanged(t *testing.T) {
 			t.Errorf("ESC + %q produced %v, want exactly one key", rune(c), got)
 			continue
 		}
-		if c >= 'A' && c <= 'Z' {
-			if want := fmt.Sprintf("M-S-%c", c+32); got[0] != want {
-				t.Errorf("ESC + %q parsed as %q, want %q", rune(c), got[0], want)
-			}
-			continue
-		}
 		if want := fmt.Sprintf("M-%c", c); got[0] != want {
 			t.Errorf("ESC + %q parsed as %q, want %q", rune(c), got[0], want)
+		}
+	}
+}
+
+// Case is the only thing that separates the two forms of a letter under Mega,
+// and it separates them — the pair must not collapse onto one name, or a keymap
+// that binds them apart cannot be honoured.
+//
+// The wire says it in one byte: 0x1B 0x78 and 0x1B 0x58 differ by the letter's
+// case and by nothing else, because there is no modifier field on this path to
+// say more. Reading that case back out is the whole of the report.
+func TestMegaLettersKeepTheirCase(t *testing.T) {
+	for c := 'a'; c <= 'z'; c++ {
+		lower := feedKeys(t, "\x1b"+string(c))
+		upper := feedKeys(t, "\x1b"+string(c-32))
+		if len(lower) != 1 || len(upper) != 1 {
+			t.Errorf("ESC %q -> %v, ESC %q -> %v; want one key each",
+				c, lower, c-32, upper)
+			continue
+		}
+		if lower[0] != "M-"+string(c) {
+			t.Errorf("ESC %q parsed as %q, want %q", c, lower[0], "M-"+string(c))
+		}
+		if upper[0] != "M-"+string(c-32) {
+			t.Errorf("ESC %q parsed as %q, want %q", c-32, upper[0], "M-"+string(c-32))
+		}
+		if lower[0] == upper[0] {
+			t.Errorf("ESC %q and ESC %q both parsed as %q", c, c-32, lower[0])
 		}
 	}
 }
