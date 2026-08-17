@@ -407,7 +407,11 @@ var escBindings = map[string]string{
 	// CR cannot know which was struck. Without this entry the sequence decoded
 	// as three keystrokes — Escape, then O, then M — so the keypad's Enter was
 	// unreadable from any terminal that sent it.
-	"\x1bOM": "Enter",
+	//
+	// The rest of the application-keypad set (SS3 p-y for the digits, l/m/n for
+	// the punctuation) is still undecoded; when it arrives it belongs under the
+	// same "P-" prefix this one now carries.
+	"\x1bOM": "P-Enter",
 }
 
 // Control key names
@@ -425,7 +429,7 @@ var controlKeys = map[byte]string{
 	10: "^J",        // Ctrl-J (LF) - distinct from Enter
 	11: "^K",
 	12: "^L",
-	13: "Return", // Ctrl-M (CR) - the home-row key; the keypad's is "Enter"
+	13: "Return", // Ctrl-M (CR) - the home-row key; the keypad's is "P-Enter"
 	14: "^N",
 	15: "^O",
 	16: "^P",
@@ -1846,6 +1850,27 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 		21: "F10",
 		23: "F11",
 		24: "F12",
+		// F13-F20, which stopped at F12 and so could not arrive on this path
+		// at all. The kitty protocol reports them (57376-57383) and the
+		// vocabulary has named them since it was written, but a terminal
+		// without that protocol sends them here — and an unlisted number
+		// falls through to be read byte by byte, so a VT220's Help key
+		// produced five keystrokes, "Escape [ 2 8 ~", typing "[28~" into the
+		// application. The same failure the keypad's Enter had before SS3 M
+		// was read.
+		//
+		// The numbering is xterm's, and it is not contiguous: the gaps at 16,
+		// 22, 27, 30 and 35 are real, left by DEC. What a VT220 keyboard calls
+		// Help and Do land on F15 and F16, which is where every terminal in
+		// use puts them.
+		25: "F13",
+		26: "F14",
+		28: "F15", // "Help" on a VT220 keyboard
+		29: "F16", // "Do" on a VT220 keyboard
+		31: "F17",
+		32: "F18",
+		33: "F19",
+		34: "F20",
 	}
 
 	if len(parts) == 0 {
@@ -1873,17 +1898,28 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 
 // Kitty protocol special keys.
 //
-// These are KEYCODES, not bytes, which is why 127 answers differently here
-// than in controlKeys: the kitty protocol reports which key was pressed, so
-// 127 identifies the backspace KEY and carries none of the BS/DEL ambiguity
-// the legacy byte does. Naming it "Delete" to match controlKeys[127] would
-// discard the very disambiguation this protocol exists to provide.
+// These are KEYCODES, not bytes. kitty keycode 127 is the physical erase-left
+// key; our name for that key is "Delete"; "Backspace" names the byte-8
+// convention only.
+//
+// This said "Backspace", on the reasoning that 127-the-keycode identifies the
+// KEY while 127-the-byte is DEL, so the two should differ. The reasoning had
+// the vocabulary backwards. There is one physical erase-left key, and Delete
+// IS its name — Backspace is the concession that lets a terminal sending BS (8)
+// be told apart from one sending DEL (127) without either being confused with
+// forward delete. Handing up the concession spelling for a channel that reports
+// no byte at all named the key by a convention it was not using: the same key
+// arrived as "del" over a legacy terminal and "back" over kitty, so a binding
+// written for one went silent on the other.
+//
+// (kitty's own "DELETE" is CSI 3~, which is forward delete — our FDel — and
+// arrives through the tilde path, not this table.)
 var kittySpecialKeys = map[int]string{
 	9:   "Tab",
 	13:  "Return",
 	27:  "Escape",
 	32:  "Space",
-	127: "Backspace", // the KEY, not the DEL byte — see above
+	127: "Delete", // the physical erase-left key — see above
 	// Functional keys (Kitty extended codes)
 	57358: "CapsLock",
 	57359: "ScrollLock",
@@ -1913,19 +1949,60 @@ var kittySpecialKeys = map[int]string{
 	57381: "F18",
 	57382: "F19",
 	57383: "F20",
-	// Keypad
-	57414: "Enter", // KP_Enter - the keypad key, distinct from Return (13)
-	// Navigation
-	57417: "Up",
-	57418: "Down",
-	57419: "Left",
-	57420: "Right",
-	57421: "PageUp",
-	57422: "PageDown",
-	57423: "Home",
-	57424: "End",
-	57425: "Insert",
-	57426: "FDel", // forward delete; kitty's backspace key is 127 above
+	// The KEYPAD, every key of it, under the "P-" prefix.
+	//
+	// This block was wrong twice over. It named ten keypad keys as though they
+	// were the main cluster — so keypad Home could not be told from Home — and
+	// it had the arrows ROTATED, because 57417 is KP_LEFT and this called it
+	// "Up", 57419 is KP_UP and this called it "Left". A keypad arrow moved the
+	// cursor ninety degrees from where it pointed.
+	//
+	// The pad is a modal duplicate of keys that exist elsewhere, so the prefix
+	// says which one was pressed rather than inventing twenty names. And the
+	// duplication runs the other way too: kitty reports 57406 for the 7 with
+	// NumLock ON and 57423 for the same key with it OFF, which is exactly the
+	// rule — the number when it is locked, the named action when it is not.
+	57399: "P-0",
+	57400: "P-1",
+	57401: "P-2",
+	57402: "P-3",
+	57403: "P-4",
+	57404: "P-5",
+	57405: "P-6",
+	57406: "P-7",
+	57407: "P-8",
+	57408: "P-9",
+	57409: "P-.",
+	57410: "P-/",
+	57411: "P-*",
+	57412: "P--",
+	57413: "P-+",
+	57414: "P-Enter", // the keypad's own, never the home row's Return
+	57415: "P-=",
+	// KP_SEPARATOR, and it is the LOWERCASE comma because of where that name
+	// comes from. kitty resolves this one from the xkb keysym rather than a
+	// scancode (glfw_key_for_sym: XKB_KEY_KP_Separator -> KP_SEPARATOR), and
+	// X11's keypad keysyms are the DEC LK201's pad almost one for one — KP_F1
+	// through KP_F4 exist for nothing but that keyboard's PF1-PF4, beside
+	// KP_Separator, KP_Decimal, KP_Subtract and KP_Enter. The LK201 wears its
+	// comma in the right-hand column directly above Enter, which is the same
+	// key an AS/400 column carries (HID 133 KeypadComma, next door to 134
+	// KeypadEqualSign) and the same one a modern USB pad puts beside the plus.
+	// So this is the archaic comma, and "P-," stays reserved for the PC-98's,
+	// which sits in the bottom row beside the 0 and the period and reaches HID
+	// as International6 (140).
+	57416: "p-,",
+	57417: "P-Left",
+	57418: "P-Right",
+	57419: "P-Up",
+	57420: "P-Down",
+	57421: "P-PageUp",
+	57422: "P-PageDown",
+	57423: "P-Home",
+	57424: "P-End",
+	57425: "P-Insert",
+	57426: "P-Delete", // the pad's own erase, not the erase-left key at 127
+	57427: "P-Begin",  // the 5 with NumLock off; duplicates nothing elsewhere
 }
 
 // modifierKeyInfo holds modifier name and side (Left/Right)
@@ -2123,8 +2200,41 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 		return baseName + eventSuffix, true
 	}
 
+	// Control on a SHOWN keypad key takes the caret, written against the
+	// character the key shows: Ctrl on the pad's 7 is "P-^7", not "C-P-7".
+	// That is how this vocabulary spells Control for a key that is shown
+	// rather than named — the main number row already does it in
+	// formatNumberKey — and the pad prefix sits outside the caret, which is
+	// where the canonical order puts it (C- G- M- m- S- s- H- P- p- ^Key).
+	//
+	// A NAMED pad key keeps "C-", because a name has no character for the
+	// caret to sit against: "C-P-Home", not "P-^Home".
+	if pad, shown, isShown := splitPadShownKey(baseName); isShown && (mod-1)&4 != 0 {
+		withoutCtrl := modifierPrefix(((mod - 1) &^ 4) + 1)
+		return withoutCtrl + pad + "^" + shown + eventSuffix, true
+	}
+
 	prefix := modifierPrefix(mod)
 	return prefix + baseName + eventSuffix, true
+}
+
+// splitPadShownKey separates a keypad name into its prefix and the character
+// the key shows, reporting false for a pad key that is NAMED rather than shown.
+//
+// The test is the remainder's length: every shown pad key is one character
+// (a digit, ".", "/", "*", "-", "+", "=", ","), and every named one is a word
+// (Home, Enter, Begin, Delete). Nothing else in the table starts with a pad
+// prefix, so a non-pad name falls straight through.
+func splitPadShownKey(name string) (pad, shown string, ok bool) {
+	for _, p := range []string{"P-", "p-"} {
+		if rest, found := strings.CutPrefix(name, p); found {
+			if len([]rune(rest)) == 1 {
+				return p, rest, true
+			}
+			return "", "", false
+		}
+	}
+	return "", "", false
 }
 
 // formatLetterKey formats a letter key with modifiers
@@ -2213,8 +2323,21 @@ var numberShiftMap = map[byte]byte{
 }
 
 // isSymbolKey checks if the keycode is a symbol key
+// The comparison is against the keycode itself, NOT byte(keycode).
+//
+// Truncating threw away everything above the low eight bits, so any keycode
+// whose last byte happened to land on one of these characters was claimed here
+// — and this test runs BEFORE kittySpecialKeys, so the claim won. Keypad 4 is
+// 57403, whose low byte is ';', and keypad 6 is 57405, whose low byte is '=':
+// both typed a symbol instead of moving the cursor. F20 (57383, low byte '\”)
+// typed an apostrophe. Every one of these cases is silent, because what comes
+// out is a real key that a keymap will happily bind.
+//
+// All eleven characters are ASCII, so comparing the int is exact and the
+// byte() conversion in formatSymbolKey stays safe: nothing reaches it now
+// without being one of these.
 func isSymbolKey(keycode int) bool {
-	switch byte(keycode) {
+	switch keycode {
 	case '`', ',', '.', '/', ';', '\'', '[', ']', '\\', '-', '=':
 		return true
 	}
