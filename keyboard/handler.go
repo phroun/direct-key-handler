@@ -44,6 +44,17 @@ type Handler struct {
 	OnPaste      func(content []byte)   // Called on bracketed paste content (complete)
 	OnPasteChunk func(chunk PasteChunk) // Called on incremental paste chunks
 
+	// OnFocus is called when the terminal reports gaining or losing focus,
+	// which it does only if the application has enabled focus reporting
+	// (DECSET ?1004). Not a key: nothing is sent to the Keys channel for it.
+	//
+	// Losing focus also RELEASES every key still down, before this is called.
+	// The keyboard has gone to someone else, so the key-up for anything held
+	// is delivered there and will never arrive here — waiting for it means
+	// waiting forever, and the press would stand for good in anything tracking
+	// held keys. A browser does the same on blur.
+	OnFocus func(focused bool)
+
 	// OnClipboard is called with an OSC 52 clipboard *response*
 	// (ESC ] 52 ; <selection> ; <base64> BEL/ST) - the terminal's answer to a
 	// clipboard-read query. selection is the target byte ('c', 'p', ...) and
@@ -841,6 +852,19 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			// simply commit to APC and wait: an unterminated one is given
 			// back as that key (see abandonAPC).
 			escTimeout.Reset(escapeTimeout)
+			return
+		}
+
+		// Focus reporting (DECSET ?1004): CSI I on gaining focus, CSI O on
+		// losing it. These are not keys, and without this they fell through
+		// every parse and were re-read byte by byte — a phantom Escape, then
+		// "[" and "I" typed as text, for any application that had enabled the
+		// mode.
+		if seq == "\x1b[I" || seq == "\x1b[O" {
+			h.handleFocusReport(seq == "\x1b[I")
+			h.escBuffer = nil
+			h.inEscape = false
+			escTimeout.Stop()
 			return
 		}
 
@@ -2228,6 +2252,21 @@ func (h *Handler) reconcileHeld(seq, name string) (string, bool) {
 	default: // press
 		h.heldKeys[identity] = name
 		return name, true
+	}
+}
+
+// handleFocusReport acts on the terminal's focus notification.
+//
+// Losing focus releases everything still down FIRST, before the callback, so a
+// consumer that reacts to the focus change is not still holding keys when it
+// does. This is the one case dropping an unmatched release cannot cover: the
+// key-up goes to whoever has the keyboard now, so it never arrives here.
+func (h *Handler) handleFocusReport(focused bool) {
+	if !focused {
+		h.ReleaseHeldKeys()
+	}
+	if h.OnFocus != nil {
+		h.OnFocus(focused)
 	}
 }
 

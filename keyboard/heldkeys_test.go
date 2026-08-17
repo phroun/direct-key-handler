@@ -181,6 +181,88 @@ func TestAPressSpelledLiterallyIsStillHeld(t *testing.T) {
 	}
 }
 
+// Losing focus releases every key still down.
+//
+// This is the one case dropping an unmatched release cannot cover: the key-up
+// for a key held across a focus change is delivered to whoever has the keyboard
+// now, so waiting for it means waiting forever and the press stands for good.
+// A browser releases its keys on blur for the same reason.
+func TestLosingFocusReleasesTheKeysStillDown(t *testing.T) {
+	got := feedKeys(t, "\x1b[97;5u\x1b[O")
+	if len(got) != 2 || got[0] != "^A" || got[1] != "^A:Release" {
+		t.Errorf("a held key then focus out -> %v, want [^A ^A:Release]", got)
+	}
+
+	// Everything down, not just the last one, and in a settled order.
+	got = feedKeys(t, "\x1b[97;5u\x1b[1;1A\x1b[O")
+	want := []string{"^A", "Up", "Up:Release", "^A:Release"}
+	if len(got) != len(want) {
+		t.Fatalf("two keys held then focus out -> %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("two keys held then focus out -> %v, want %v", got, want)
+			break
+		}
+	}
+
+	// A key-up that does arrive after the flush is an orphan, so nothing is
+	// released twice. That is the drop rule doing exactly its job.
+	got = feedKeys(t, "\x1b[97;5u\x1b[O\x1b[97;1:3u")
+	if len(got) != 2 {
+		t.Errorf("flush then a late release -> %v, want the key released once", got)
+	}
+
+	// GAINING focus releases nothing: the keys are still down, and a key held
+	// across a click back into the window must not be reported up.
+	got = feedKeys(t, "\x1b[97;5u\x1b[I\x1b[97;1:3u")
+	if len(got) != 2 || got[1] != "^A:Release" {
+		t.Errorf("focus in mid-hold -> %v, want the real release to still work", got)
+	}
+}
+
+// The focus reports are not keys, and are not typed as text either.
+//
+// Nothing handled CSI I and CSI O, so they fell through every parse and were
+// re-read byte by byte: a phantom Escape, then "[" and "I" as characters. Any
+// application that turned focus reporting on got that on every alt-tab.
+func TestFocusReportsAreNotKeys(t *testing.T) {
+	for _, raw := range []string{"\x1b[I", "\x1b[O"} {
+		if got := feedKeys(t, raw); len(got) != 0 {
+			t.Errorf("%q produced %v, want no keys at all", raw, got)
+		}
+	}
+}
+
+// The callback fires for both directions, and the releases are reported BEFORE
+// it — a consumer reacting to the focus change should not still be holding keys
+// when it does.
+func TestOnFocusFiresAfterTheKeysAreReleased(t *testing.T) {
+	f := false
+	h := New(Options{ManageTerminal: &f})
+
+	var order []string
+	h.OnKey = func(k string) { order = append(order, "key:"+k) }
+	h.OnFocus = func(focused bool) {
+		order = append(order, map[bool]string{true: "focus:in", false: "focus:out"}[focused])
+	}
+
+	h.heldKeys["u:97"] = "^A"
+	h.handleFocusReport(false)
+	h.handleFocusReport(true)
+
+	want := []string{"key:^A:Release", "focus:out", "focus:in"}
+	if len(order) != len(want) {
+		t.Fatalf("order was %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Errorf("order was %v, want %v", order, want)
+			break
+		}
+	}
+}
+
 // ReleaseHeldKeys is the way out of the one case dropping cannot cover: a key
 // let go while the keyboard is somewhere else, whose release this package will
 // never be sent. Without it the press stands forever downstream.
