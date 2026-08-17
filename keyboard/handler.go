@@ -1850,6 +1850,27 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 		21: "F10",
 		23: "F11",
 		24: "F12",
+		// F13-F20, which stopped at F12 and so could not arrive on this path
+		// at all. The kitty protocol reports them (57376-57383) and the
+		// vocabulary has named them since it was written, but a terminal
+		// without that protocol sends them here — and an unlisted number
+		// falls through to be read byte by byte, so a VT220's Help key
+		// produced five keystrokes, "Escape [ 2 8 ~", typing "[28~" into the
+		// application. The same failure the keypad's Enter had before SS3 M
+		// was read.
+		//
+		// The numbering is xterm's, and it is not contiguous: the gaps at 16,
+		// 22, 27, 30 and 35 are real, left by DEC. What a VT220 keyboard calls
+		// Help and Do land on F15 and F16, which is where every terminal in
+		// use puts them.
+		25: "F13",
+		26: "F14",
+		28: "F15", // "Help" on a VT220 keyboard
+		29: "F16", // "Do" on a VT220 keyboard
+		31: "F17",
+		32: "F18",
+		33: "F19",
+		34: "F20",
 	}
 
 	if len(parts) == 0 {
@@ -2302,8 +2323,21 @@ var numberShiftMap = map[byte]byte{
 }
 
 // isSymbolKey checks if the keycode is a symbol key
+// The comparison is against the keycode itself, NOT byte(keycode).
+//
+// Truncating threw away everything above the low eight bits, so any keycode
+// whose last byte happened to land on one of these characters was claimed here
+// — and this test runs BEFORE kittySpecialKeys, so the claim won. Keypad 4 is
+// 57403, whose low byte is ';', and keypad 6 is 57405, whose low byte is '=':
+// both typed a symbol instead of moving the cursor. F20 (57383, low byte '\”)
+// typed an apostrophe. Every one of these cases is silent, because what comes
+// out is a real key that a keymap will happily bind.
+//
+// All eleven characters are ASCII, so comparing the int is exact and the
+// byte() conversion in formatSymbolKey stays safe: nothing reaches it now
+// without being one of these.
 func isSymbolKey(keycode int) bool {
-	switch byte(keycode) {
+	switch keycode {
 	case '`', ',', '.', '/', ';', '\'', '[', ']', '\\', '-', '=':
 		return true
 	}

@@ -1,6 +1,8 @@
 package keyboard
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -57,7 +59,18 @@ func TestKeypadKeysAreDistinctFromTheMainCluster(t *testing.T) {
 func TestNumLockPicksTheKeycodeAndBothAreRead(t *testing.T) {
 	for _, tc := range []struct{ raw, want string }{
 		{"\x1b[57399u", "P-0"},
+		{"\x1b[57400u", "P-1"},
+		{"\x1b[57401u", "P-2"},
+		{"\x1b[57402u", "P-3"},
+		// 57403 and 57405 are not filler. Their low bytes are ';' and '=',
+		// and a truncating symbol test claimed them before the keypad table
+		// was consulted, so keypad 4 typed a semicolon and keypad 6 typed an
+		// equals sign. Sampling this range is what hid that; every code in it
+		// is named here now.
+		{"\x1b[57403u", "P-4"},
+		{"\x1b[57405u", "P-6"},
 		{"\x1b[57406u", "P-7"}, // KP_0 is 57399, so the 7 is 57406
+		{"\x1b[57407u", "P-8"},
 		{"\x1b[57408u", "P-9"},
 		{"\x1b[57409u", "P-."},
 		{"\x1b[57410u", "P-/"},
@@ -77,6 +90,28 @@ func TestNumLockPicksTheKeycodeAndBothAreRead(t *testing.T) {
 	} {
 		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
 			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// No keycode in the pad's range escapes the pad.
+//
+// The table above says what each key IS; this says that none of them is
+// something else. A parse path that claims a keycode before the keypad table
+// is reached produces a real key — a symbol, a letter — so nothing looks
+// broken downstream, and the only way to catch it is to assert over the whole
+// contiguous range rather than the codes someone thought to list.
+func TestNothingInTheKeypadRangeEscapesThePad(t *testing.T) {
+	for code := 57399; code <= 57427; code++ {
+		raw := "\x1b[" + strconv.Itoa(code) + "u"
+		got := feedKeys(t, raw)
+		if len(got) != 1 {
+			t.Errorf("%q produced %v, want exactly one key", raw, got)
+			continue
+		}
+		if !strings.HasPrefix(got[0], "P-") && !strings.HasPrefix(got[0], "p-") {
+			t.Errorf("keycode %d (low byte %q) parsed as %q — something claimed "+
+				"it before the keypad table", code, byte(code), got[0])
 		}
 	}
 }
