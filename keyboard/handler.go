@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -113,6 +114,26 @@ type Handler struct {
 	// Echo output (where to echo typed characters)
 	echoWriter io.Writer
 
+	// heldKeys remembers, per kitty keycode, the name this package EMITTED when
+	// that key went down, so its repeat and release can be reported under the
+	// same name rather than derived again.
+	//
+	// Deriving again is wrong because the modifiers have moved on. A release
+	// carries the modifier mask as it stands at the moment of release, so
+	// letting go of Control a few milliseconds before the letter — which is
+	// what fingers actually do — sent "^A" down and "a" up. Nothing downstream
+	// could pair those, and anything tracking held keys held "^A" forever.
+	//
+	// The rules are what keep it honest: a press RECORDS, overwriting any
+	// stale entry, so a press can never inherit an older one; a release
+	// REPLAYS and DELETES, so an entry cannot outlive the key being down; and
+	// a release with no entry is dropped, which is safe by construction —
+	// no entry means this package never emitted a press for that key, so
+	// nothing downstream believes it is held.
+	//
+	// Guarded by mu.
+	heldKeys map[string]string
+
 	// Debug callback (optional)
 	debugFn func(string)
 }
@@ -209,6 +230,7 @@ func New(opts Options) *Handler {
 		decodeMacOSOption: decodeMacOSOption,
 		emitPasteKeys:     emitPasteKeys,
 		keyNames:          copyKeyNames(opts.KeyNames),
+		heldKeys:          make(map[string]string),
 	}
 
 	// Check if input is a terminal file descriptor
@@ -268,6 +290,12 @@ func (h *Handler) Stop() error {
 	// Signal stop
 	close(h.stopChan)
 	h.running = false
+
+	// Forget which keys were down. Nothing is emitted for them — the consumer
+	// is going away, and a release delivered during shutdown reaches nobody —
+	// but the entries must not survive into a restart, where a release could
+	// otherwise replay a name from the previous session.
+	clear(h.heldKeys)
 
 	// Restore terminal state if we changed it
 	if h.managesTerminal && h.originalTermState != nil {
@@ -817,6 +845,15 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 		}
 
 		if key, ok := escBindings[seq]; ok {
+			// Remember it as held. This table holds LITERAL sequences, so it
+			// only ever matches presses — a release carries the event
+			// sub-parameter and can never be one of these strings, so it falls
+			// through to parseModifiedCSI below. Without recording here the
+			// press of every literally-spelled key would go unremembered and
+			// its release would arrive an orphan and be dropped: an unmodified
+			// arrow goes DOWN as "\x1b[A" and comes UP as "\x1b[1;1:3A", and
+			// that is the pair this would have lost.
+			h.recordHeld(seq, key)
 			h.emitKey(key)
 			h.escBuffer = nil
 			h.inEscape = false
@@ -1513,7 +1550,23 @@ func (h *Handler) parseMegaSequence(seq string) (string, bool) {
 
 // parseModifiedCSI dynamically parses CSI sequences with modifiers
 // Returns single key, or for mouse events returns "" and handles emission internally
+// parseModifiedCSI decodes one CSI sequence and reconciles it against the keys
+// this package has already reported as down.
+//
+// The reconciliation sits here, around every family at once, rather than inside
+// the "u" decoder: with event types negotiated but disambiguation left off — as
+// a host does when it wants presses to stay byte-identical — an arrow key's
+// release arrives as "CSI 1;1:3A", not as a "u" form at all. Fixing only the
+// keycode path would have left the common case untouched.
 func (h *Handler) parseModifiedCSI(seq string) (string, bool) {
+	name, ok := h.decodeModifiedCSI(seq)
+	if !ok {
+		return name, ok
+	}
+	return h.reconcileHeld(seq, name)
+}
+
+func (h *Handler) decodeModifiedCSI(seq string) (string, bool) {
 	// Check for macOS Option+arrow: ESC ESC [ X
 	// Emit "Special" first to distinguish from xterm-style sequences
 	if len(seq) == 4 && seq[0] == 0x1b && seq[1] == 0x1b && seq[2] == '[' {
@@ -2052,6 +2105,159 @@ var kittyModifierKeys = map[int]modifierKeyInfo{
 
 // parseKittyProtocol handles CSI keycode ; modifiers : event_type u format
 // Event types: 1=press, 2=repeat, 3=release
+// csiKeyIdentity names the physical key a CSI sequence is about, and says which
+// of press, repeat and release it is.
+//
+// The identity has to be namespaced because the CSI families identify a key
+// three different ways: the "u" form by a keycode, the "~" form by a number,
+// and the cursor and F1-F4 forms by their final letter alone. Those number
+// spaces overlap — "CSI 3~" is forward delete and "CSI 3;5u" is Ctrl-C — so a
+// bare integer would let one key consume another's entry.
+//
+// Reports false for anything that is not a key: mouse events, position and
+// window-op replies, and the macOS Option+arrow shape that carries no event
+// type at all.
+func csiKeyIdentity(seq string) (identity string, eventType int, ok bool) {
+	if len(seq) < 3 || seq[0] != 0x1b {
+		return "", 0, false
+	}
+	// SS3: the same keys in application cursor mode. "ESC O A" and "CSI A" are
+	// one physical key spelled two ways, so they share an identity — a terminal
+	// can send the press in either mode and the release always arrives as CSI.
+	// SS3 M is left out deliberately: the keypad's Enter is reported by keycode
+	// under the kitty protocol, so it lives in the "u" space and pairing it
+	// here would put its press and release in different namespaces.
+	if seq[1] == 'O' && len(seq) == 3 {
+		switch seq[2] {
+		case 'A', 'B', 'C', 'D', 'H', 'F', 'P', 'Q', 'S':
+			return "f:" + string(seq[2]), 1, true
+		}
+		return "", 0, false
+	}
+	if seq[1] != '[' {
+		return "", 0, false
+	}
+	body := seq[2:]
+	final := body[len(body)-1]
+	switch final {
+	case 'u', '~', 'A', 'B', 'C', 'D', 'H', 'F', 'E', 'P', 'Q', 'S':
+	default:
+		return "", 0, false
+	}
+
+	params := strings.Split(body[:len(body)-1], ";")
+	first := params[0]
+	if i := strings.IndexByte(first, ':'); i >= 0 {
+		first = first[:i]
+	}
+
+	// The event type rides as a sub-parameter of the MODIFIER field, in every
+	// family — that is what makes one rule possible here at all.
+	eventType = 1
+	if len(params) >= 2 {
+		if i := strings.IndexByte(params[1], ':'); i >= 0 {
+			if et, err := strconv.Atoi(params[1][i+1:]); err == nil {
+				eventType = et
+			}
+		}
+	}
+
+	switch final {
+	case 'u':
+		// The modifier keys report themselves in their own shape
+		// ("S-Press:Left"), carry no chord name to hold, and are the one thing
+		// whose release is the event rather than the end of one.
+		if _, isModifier := kittyModifierKeys[parseModifierParam(first)]; isModifier {
+			return "", 0, false
+		}
+		return "u:" + first, eventType, true
+	case '~':
+		return "~:" + first, eventType, true
+	default:
+		return "f:" + string(final), eventType, true
+	}
+}
+
+// recordHeld remembers a name as this key's, for a press that reached the
+// caller by a route with no event type to read — the literal-sequence table.
+func (h *Handler) recordHeld(seq, name string) {
+	identity, _, ok := csiKeyIdentity(seq)
+	if !ok {
+		return
+	}
+	h.mu.Lock()
+	h.heldKeys[identity] = name
+	h.mu.Unlock()
+}
+
+// reconcileHeld records a press and replays it for the repeats and the release
+// that follow, so all three name one key the same way.
+//
+// A release with nothing recorded is DROPPED. That is safe by construction
+// rather than by luck: heldKeys holds exactly what this package emitted, so an
+// absent entry means no press was ever reported for that key and nothing
+// downstream can be holding it. Passing the derived name through instead is
+// what produced the mismatch in the first place.
+func (h *Handler) reconcileHeld(seq, name string) (string, bool) {
+	identity, eventType, ok := csiKeyIdentity(seq)
+	if !ok {
+		return name, true
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch eventType {
+	case 3: // release
+		held, ok := h.heldKeys[identity]
+		if !ok {
+			// Consumed and emitted as nothing — NOT "not a key". Answering
+			// false sends the caller back to read the sequence byte by byte,
+			// which turns a dropped release into a phantom Escape followed by
+			// its digits typed as text.
+			return "", true
+		}
+		delete(h.heldKeys, identity)
+		return held + ":Release", true
+	case 2: // repeat
+		// A held key whose modifiers change mid-hold would otherwise start
+		// repeating under a different name than it went down with.
+		if held, ok := h.heldKeys[identity]; ok {
+			return held + ":Repeat", true
+		}
+		return name, true
+	default: // press
+		h.heldKeys[identity] = name
+		return name, true
+	}
+}
+
+// ReleaseHeldKeys reports a release for every key still down and forgets them,
+// returning the names it emitted.
+//
+// A host calls this when it knows the keyboard has gone away — focus lost, a
+// window deactivated — because in that case the terminal will never send the
+// releases: the key is let go while someone else is listening. Without it the
+// press stands forever downstream, which is the one way dropping an unmatched
+// release could strand a key. This package cannot detect that moment itself,
+// having no focus reporting of its own, so it offers the mechanism to whoever
+// does know.
+func (h *Handler) ReleaseHeldKeys() []string {
+	h.mu.Lock()
+	held := h.heldKeys
+	h.heldKeys = make(map[string]string)
+	h.mu.Unlock()
+
+	names := make([]string, 0, len(held))
+	for _, name := range held {
+		names = append(names, name+":Release")
+	}
+	sort.Strings(names) // a map has no order; releases should not be a lottery
+	for _, n := range names {
+		h.emitKey(n)
+	}
+	return names
+}
+
 func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	if len(parts) == 0 {
 		return "", false

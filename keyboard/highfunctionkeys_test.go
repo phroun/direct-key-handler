@@ -82,11 +82,13 @@ func TestHighFunctionKeysTakeModifiersAndEvents(t *testing.T) {
 		{"\x1b[28;5~", "C-F15"},
 		{"\x1b[29;2~", "S-F16"},
 		{"\x1b[25;3~", "M-F13"},
-		{"\x1b[28;1:3~", "F15:Release"},
-		{"\x1b[29;5:2~", "C-F16:Repeat"},
+		// The event forms are fed after their press: a release names the key
+		// its press named, and one arriving alone is dropped.
+		{"\x1b[28;1~\x1b[28;1:3~", "F15:Release"},
+		{"\x1b[29;5~\x1b[29;5:2~", "C-F16:Repeat"},
 	} {
-		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
-			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
+		if got := feedKeys(t, tc.raw); len(got) == 0 || got[len(got)-1] != tc.want {
+			t.Errorf("%q parsed as %v, want the last key to be %q", tc.raw, got, tc.want)
 		}
 	}
 }
