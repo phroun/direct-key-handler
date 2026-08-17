@@ -13,32 +13,79 @@ import (
 // arrow key, of Home, of F1 or of F5 did not go missing — it arrived as a
 // SECOND press of that key, indistinguishable from the real one. A terminal
 // asked for event reporting therefore made every held key act twice.
+// Each case feeds the PRESS first, because a release is now reported under the
+// name its press was given, and one arriving alone is dropped as non-conformant
+// — you cannot release a key you never pressed. Reading the event type out of
+// the sequence is what makes that pairing possible at all, which is still what
+// this tests; the press is scaffolding.
 func TestEventTypeIsReadFromEveryCSIFamily(t *testing.T) {
-	for _, tc := range []struct{ raw, want string }{
+	for _, tc := range []struct{ press, raw, want string }{
 		// Cursor keys: CSI 1 ; <mod>:<event> <A-D>
-		{"\x1b[1;1:3A", "Up:Release"},
-		{"\x1b[1;1:2B", "Down:Repeat"},
-		{"\x1b[1;1:1C", "Right"},
-		{"\x1b[1;5:3D", "C-Left:Release"},
+		{"\x1b[1;1A", "\x1b[1;1:3A", "Up:Release"},
+		{"\x1b[1;1B", "\x1b[1;1:2B", "Down:Repeat"},
+		{"", "\x1b[1;1:1C", "Right"},
+		{"\x1b[1;5D", "\x1b[1;5:3D", "C-Left:Release"},
 		// Home and End share the cursor-key shape.
-		{"\x1b[1;1:3H", "Home:Release"},
-		{"\x1b[1;2:3F", "S-End:Release"},
+		{"\x1b[1;1H", "\x1b[1;1:3H", "Home:Release"},
+		{"\x1b[1;2F", "\x1b[1;2:3F", "S-End:Release"},
 		// F1-F4 carry letter finals.
-		{"\x1b[1;1:3P", "F1:Release"},
-		{"\x1b[1;1:2S", "F4:Repeat"},
+		{"\x1b[1;1P", "\x1b[1;1:3P", "F1:Release"},
+		{"\x1b[1;1S", "\x1b[1;1:2S", "F4:Repeat"},
 		// The tilde family: CSI <num> ; <mod>:<event> ~
-		{"\x1b[15;1:3~", "F5:Release"},
-		{"\x1b[5;1:3~", "PageUp:Release"},
-		{"\x1b[3;5:3~", "C-FDel:Release"},
+		{"\x1b[15;1~", "\x1b[15;1:3~", "F5:Release"},
+		{"\x1b[5;1~", "\x1b[5;1:3~", "PageUp:Release"},
+		{"\x1b[3;5~", "\x1b[3;5:3~", "C-FDel:Release"},
 		// The "u" form already did this, and must go on doing it.
-		{"\x1b[97;1:3u", "a:Release"},
+		{"\x1b[97;1u", "\x1b[97;1:3u", "a:Release"},
 		// A press is unmarked, however it is spelled.
-		{"\x1b[1;1A", "Up"},
-		{"\x1b[15;1~", "F5"},
+		{"", "\x1b[1;1A", "Up"},
+		{"", "\x1b[15;1~", "F5"},
 	} {
-		got := feedKeys(t, tc.raw)
-		if len(got) != 1 || got[0] != tc.want {
-			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
+		got := feedKeys(t, tc.press+tc.raw)
+		if len(got) == 0 || got[len(got)-1] != tc.want {
+			t.Errorf("%q parsed as %v, want the last key to be %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// The CSI families do not share a number space, so one key cannot consume
+// another's entry.
+//
+// They identify a key three different ways — the "u" form by keycode, the "~"
+// form by number, the cursor and F1-F4 forms by their final letter alone — and
+// those numbers overlap: "CSI 3 ~" is forward delete while "CSI 3 ; 5 u" is
+// Ctrl-C. Remembered under a bare integer, pressing one would answer for the
+// other's release.
+func TestTheCSIFamiliesAreHeldSeparately(t *testing.T) {
+	// The cursor keys, Home, End and F1-F4 ALL carry "1" as their first
+	// parameter — the final letter is the only thing telling them apart. Held
+	// under that parameter they would share one entry, so pressing Up would
+	// answer for Left's release, and the four arrows would be one key.
+	got := feedKeys(t, "\x1b[1;1A\x1b[1;1:3D")
+	if len(got) != 1 || got[0] != "Up" {
+		t.Errorf("Up press then LEFT release -> %v, want just [Up]; the arrows "+
+			"are sharing one entry", got)
+	}
+	got = feedKeys(t, "\x1b[1;1A\x1b[1;1:3P")
+	if len(got) != 1 || got[0] != "Up" {
+		t.Errorf("Up press then F1 release -> %v, want just [Up]", got)
+	}
+	// And across families: a tilde number must not answer for a cursor final.
+	got = feedKeys(t, "\x1b[15;1~\x1b[1;1:3A")
+	if len(got) != 1 || got[0] != "F5" {
+		t.Errorf("F5 press then Up release -> %v, want just [F5]", got)
+	}
+	// Each still releases correctly under its own identity, so the separation
+	// is not just a way of dropping everything.
+	got = feedKeys(t, "\x1b[1;1A\x1b[1;1B\x1b[1;1:3B\x1b[1;1:3A")
+	want := []string{"Up", "Down", "Down:Release", "Up:Release"}
+	if len(got) != 4 {
+		t.Fatalf("Up and Down held together -> %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Up and Down held together -> %v, want %v", got, want)
+			break
 		}
 	}
 }

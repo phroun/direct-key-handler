@@ -147,13 +147,13 @@ func TestControlOnAShownKeypadKeyTakesTheCaret(t *testing.T) {
 // is a key that never comes up.
 func TestKeypadCaretKeepsTheEventSuffix(t *testing.T) {
 	for _, tc := range []struct{ raw, want string }{
-		{"\x1b[57406;5:3u", "P-^7:Release"},
-		{"\x1b[57406;5:2u", "P-^7:Repeat"},
-		{"\x1b[57423;5:3u", "C-P-Home:Release"},
-		{"\x1b[57406;1:3u", "P-7:Release"},
+		{"\x1b[57406;5u\x1b[57406;5:3u", "P-^7:Release"},
+		{"\x1b[57406;5u\x1b[57406;5:2u", "P-^7:Repeat"},
+		{"\x1b[57423;5u\x1b[57423;5:3u", "C-P-Home:Release"},
+		{"\x1b[57406;1u\x1b[57406;1:3u", "P-7:Release"},
 	} {
-		if got := feedKeys(t, tc.raw); len(got) != 1 || got[0] != tc.want {
-			t.Errorf("%q parsed as %v, want [%s]", tc.raw, got, tc.want)
+		if got := feedKeys(t, tc.raw); len(got) == 0 || got[len(got)-1] != tc.want {
+			t.Errorf("%q parsed as %v, want the last key to be %q", tc.raw, got, tc.want)
 		}
 	}
 }

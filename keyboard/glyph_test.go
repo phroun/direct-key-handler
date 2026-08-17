@@ -16,13 +16,14 @@ func TestGlyphModifierDecode(t *testing.T) {
 		{"\x1b[64;257u", "G-@"},
 		// Glyph co-held with Shift (bit 1): 257 + 1 = 258.
 		{"\x1b[233;258u", "G-S-é"},
-		// Release event: CSI 8364 ; 257 : 3 u.
-		{"\x1b[8364;257:3u", "G-€:Release"},
+		// Release event: CSI 8364 ; 257 : 3 u, fed after its press — a release
+		// arriving alone is dropped now, since it names a key never pressed.
+		{"\x1b[8364;257u\x1b[8364;257:3u", "G-€:Release"},
 	}
 	for _, c := range cases {
 		got := feedKeys(t, c.raw)
-		if len(got) != 1 || got[0] != c.want {
-			t.Errorf("%q -> %v, want [%s]", c.raw, got, c.want)
+		if len(got) == 0 || got[len(got)-1] != c.want {
+			t.Errorf("%q -> %v, want the last key to be %q", c.raw, got, c.want)
 		}
 	}
 }

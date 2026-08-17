@@ -69,13 +69,13 @@ func TestKeyNamesKeepPrefixAndSuffix(t *testing.T) {
 		{"\x1b[1;5D", "C-left"}, // legacy modified cursor key
 		// kitty, with an event suffix. 57421 is the KEYPAD's PageUp, so the
 		// pad prefix stays in front of the renamed base, exactly as "M-" does.
-		{"\x1b[57421;1:3u", "P-pgup:Release"},
-		{"\x1b[5;1:3~", "pgup:Release"}, // and the main cluster's, unprefixed
+		{"\x1b[57421;1u\x1b[57421;1:3u", "P-pgup:Release"},
+		{"\x1b[5;1~\x1b[5;1:3~", "pgup:Release"}, // and the main cluster's, unprefixed
 	}
 	for _, c := range cases {
 		got := feedKeysNamed(t, c.raw, names)
-		if len(got) != 1 || got[0] != c.want {
-			t.Errorf("%q -> %v, want [%s]", c.raw, got, c.want)
+		if len(got) == 0 || got[len(got)-1] != c.want {
+			t.Errorf("%q -> %v, want the last key to be %q", c.raw, got, c.want)
 		}
 	}
 }
