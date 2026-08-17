@@ -234,3 +234,31 @@ func TestAllKeysAreNameableAndUnique(t *testing.T) {
 		}
 	}
 }
+
+// Power is in the vocabulary but no decoder here can produce it.
+//
+// That is the point of it. There is no escape sequence for a power key and no
+// kitty keycode, so neither path in this package will ever emit one — but a
+// graphical host reading HID usage 102 has a key to name, and needs the
+// canonical spelling to come from here rather than be invented locally where
+// the renaming could not see it.
+//
+// The test pins both halves: the name resolves and travels through renaming
+// like any other, and nothing in the byte or protocol decoders answers to it.
+func TestPowerIsNameableButNotDecodable(t *testing.T) {
+	if got := KeyPower.DefaultName(); got != "Power" {
+		t.Errorf("KeyPower.DefaultName() = %q, want %q", got, "Power")
+	}
+
+	// It takes an application's rename, which is how a host reaches it.
+	var found bool
+	for _, k := range AllKeys() {
+		if k == KeyPower {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("KeyPower is absent from AllKeys, so a consumer building a " +
+			"name table from this package would never see it")
+	}
+}

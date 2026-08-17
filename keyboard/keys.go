@@ -70,6 +70,18 @@ const (
 	KeyPause
 	KeyMenu
 
+	// KeyPower is the key some keyboards carry for it — HID usage 102, which
+	// the USB document itself hedges on ("this is a status flag, not a physical
+	// key", except that Mac and Sun keyboards have one).
+	//
+	// NOTHING IN THIS PACKAGE CAN PRODUCE IT. There is no escape sequence for a
+	// power key and no kitty keycode, so neither decoder here will ever emit
+	// it. It is in the vocabulary for the other direction: a host that names
+	// keys itself — a graphical backend reading a scancode — needs a canonical
+	// spelling to hand over, and without one here it would invent a word this
+	// package's renaming could not see.
+	KeyPower
+
 	KeyF1
 	KeyF2
 	KeyF3
@@ -123,6 +135,7 @@ var defaultKeyNames = map[Key]string{
 	KeyPrintScreen: "PrintScreen",
 	KeyPause:       "Pause",
 	KeyMenu:        "Menu",
+	KeyPower:       "Power",
 
 	KeyF1:  "F1",
 	KeyF2:  "F2",
