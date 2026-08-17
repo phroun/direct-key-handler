@@ -1873,17 +1873,28 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 
 // Kitty protocol special keys.
 //
-// These are KEYCODES, not bytes, which is why 127 answers differently here
-// than in controlKeys: the kitty protocol reports which key was pressed, so
-// 127 identifies the backspace KEY and carries none of the BS/DEL ambiguity
-// the legacy byte does. Naming it "Delete" to match controlKeys[127] would
-// discard the very disambiguation this protocol exists to provide.
+// These are KEYCODES, not bytes. kitty keycode 127 is the physical erase-left
+// key; our name for that key is "Delete"; "Backspace" names the byte-8
+// convention only.
+//
+// This said "Backspace", on the reasoning that 127-the-keycode identifies the
+// KEY while 127-the-byte is DEL, so the two should differ. The reasoning had
+// the vocabulary backwards. There is one physical erase-left key, and Delete
+// IS its name — Backspace is the concession that lets a terminal sending BS (8)
+// be told apart from one sending DEL (127) without either being confused with
+// forward delete. Handing up the concession spelling for a channel that reports
+// no byte at all named the key by a convention it was not using: the same key
+// arrived as "del" over a legacy terminal and "back" over kitty, so a binding
+// written for one went silent on the other.
+//
+// (kitty's own "DELETE" is CSI 3~, which is forward delete — our FDel — and
+// arrives through the tilde path, not this table.)
 var kittySpecialKeys = map[int]string{
 	9:   "Tab",
 	13:  "Return",
 	27:  "Escape",
 	32:  "Space",
-	127: "Backspace", // the KEY, not the DEL byte — see above
+	127: "Delete", // the physical erase-left key — see above
 	// Functional keys (Kitty extended codes)
 	57358: "CapsLock",
 	57359: "ScrollLock",
@@ -1925,7 +1936,7 @@ var kittySpecialKeys = map[int]string{
 	57423: "Home",
 	57424: "End",
 	57425: "Insert",
-	57426: "FDel", // forward delete; kitty's backspace key is 127 above
+	57426: "FDel", // forward delete; the erase-left key is 127 above
 }
 
 // modifierKeyInfo holds modifier name and side (Left/Right)

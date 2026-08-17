@@ -42,3 +42,32 @@ func TestEventTypeIsReadFromEveryCSIFamily(t *testing.T) {
 		}
 	}
 }
+
+// The erase-left key carries one name whichever channel reports it.
+//
+// It is a single physical key. A terminal sends BS (8) or DEL (127) for it and
+// they are told apart so neither is confused with forward delete — that is what
+// "Backspace" is for. Under the kitty protocol no byte is reported at all: the
+// key is, as keycode 127, and its name is "Delete".
+//
+// This table said "Backspace" there, so the same key arrived as "del" over a
+// legacy terminal and "back" over kitty. Those sit in different fallback groups
+// in an application's keymap, so a binding written against one went silent when
+// the other channel delivered it — and switching terminals is all it took.
+func TestTheEraseLeftKeyIsNamedTheSameOnEveryChannel(t *testing.T) {
+	for _, tc := range []struct{ raw, want, what string }{
+		{"\x7f", "Delete", "the DEL byte"},
+		{"\x1b[127u", "Delete", "the kitty keycode for the same key"},
+		{"\x1b[127;5u", "C-Delete", "and it keeps its name under a modifier"},
+		// The byte-8 convention stays distinct: that is the whole point of
+		// having a second name.
+		{"\x08", "Backspace", "the BS byte, a terminal using the other convention"},
+		// kitty's own DELETE is forward delete, and arrives by the tilde path.
+		{"\x1b[3~", "FDel", "forward delete, a different key entirely"},
+	} {
+		got := feedKeys(t, tc.raw)
+		if len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%q (%s) parsed as %v, want [%s]", tc.raw, tc.what, got, tc.want)
+		}
+	}
+}
