@@ -2817,7 +2817,9 @@ var mouseButtons = [3]string{"MouseLeft", "MouseMiddle", "MouseRight"}
 //
 // A press and a scroll report a position first — Mouse@x,y — and then what
 // happened there. A drag carries its position in the name instead, because a
-// drag IS its position: the pointer moving is the whole event.
+// drag IS its position: the pointer moving is the whole event. Motion with no
+// button down is the same thing minus the button, which leaves just the
+// position, so that is all it reports.
 //
 // A release is emitted under the name its PRESS was emitted under, not one
 // derived again from the modifiers as they stand now. Let go of Control before
@@ -2856,12 +2858,14 @@ func (h *Handler) mouseKeys(cb, cx, cy int, isRelease bool) []string {
 		return []string{posKey, prefix + action}
 
 	case isMotion:
-		// A drag names the button being dragged with; bits of 3 mean the
-		// pointer moved with no button down at all.
-		action := "MouseDrag"
-		if buttonBits < 3 {
-			action += strings.TrimPrefix(mouseButtons[buttonBits], "Mouse")
+		// Bits of 3 mean the pointer moved with no button down, and that is
+		// not an action at all: it is nothing but where the pointer now is,
+		// which is exactly what Mouse@x,y says.
+		if buttonBits > 2 {
+			return []string{posKey}
 		}
+		// A drag names the button being dragged with.
+		action := "MouseDrag" + strings.TrimPrefix(mouseButtons[buttonBits], "Mouse")
 		return []string{fmt.Sprintf("%s%s@%d,%d", prefix, action, cx, cy)}
 
 	case isRelease:

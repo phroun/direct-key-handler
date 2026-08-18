@@ -64,7 +64,8 @@ func TestMouseModifiersAreCanonicalAndTheReleaseMatches(t *testing.T) {
 }
 
 // A drag IS its position, so it carries one instead of reporting one first.
-// With no button down it is just the pointer moving, and names no button.
+// With no button down there is no drag and nothing to name: the report is the
+// position alone, the same Mouse@x,y that precedes every other action.
 func TestMouseDrag(t *testing.T) {
 	for _, c := range []struct {
 		cb   int
@@ -73,7 +74,7 @@ func TestMouseDrag(t *testing.T) {
 		{32, "MouseDragLeft@7,8"},
 		{33, "MouseDragMiddle@7,8"},
 		{34, "MouseDragRight@7,8"},
-		{35, "MouseDrag@7,8"},
+		{35, "Mouse@7,8"},
 	} {
 		got := decodeModifierKey(t, sgr(c.cb, 7, 8, false))
 		if len(got) != 1 || got[0] != c.want {

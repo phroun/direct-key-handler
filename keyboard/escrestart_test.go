@@ -17,13 +17,13 @@ func TestEscRestartsTheSequence(t *testing.T) {
 	}{
 		// Each half on its own, for contrast.
 		{"\x1b", []string{"Escape"}},
-		{"\x1b[<35;12;5M", []string{"MouseDrag@12,5"}},
+		{"\x1b[<35;12;5M", []string{"Mouse@12,5"}},
 		{"\x1b[A", []string{"Up"}},
 
 		// Escape + a mouse report in one read still splits: Escape resolves on
 		// its own and the report parses (the esc-while-mouse-tracking fix).
 		// Before that fix the mouse body was typed out one char at a time.
-		{"\x1b\x1b[<35;12;5M", []string{"Escape", "MouseDrag@12,5"}},
+		{"\x1b\x1b[<35;12;5M", []string{"Escape", "Mouse@12,5"}},
 
 		// Option/Alt + arrow is ESC + ESC[X in one read — a single chord, NOT
 		// Escape then an arrow. It reports as M-<arrow>.
