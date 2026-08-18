@@ -47,6 +47,11 @@ const (
 	// is the whole point.
 	kittyNumLockBit = 128
 
+	// kittyCapsLockBit is the other latch in that field. It decides no key's
+	// name here — a capital letter arrives as a capital letter — and is read
+	// only for the modes list. See modes.go.
+	kittyCapsLockBit = 64
+
 	// kittyClearKey is the cap this file is about: kitty's code for the key HID
 	// names "Num Lock and Clear".
 	kittyClearKey = 57360
@@ -153,21 +158,11 @@ func (h *Handler) toggleNumLock() (changed bool, on bool) {
 	return true, h.numLock.on
 }
 
-// NumLock reports whether the number pad is locked — whether its dual-legend
-// caps mean their digits rather than their navigation actions.
-//
-// Answerable on every system, including the ones that have no NumLock: there
-// the pad is permanently locked and this permanently reports true, which is
-// what those caps do. A host drawing an on-screen indicator can therefore draw
-// one everywhere, which is most useful exactly where the OS provides none.
-//
-// It starts out true, before anything has been typed, because a locked pad is
-// what the printed legends promise and the overwhelmingly common state.
-func (h *Handler) NumLock() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.numLock.on
-}
+// The pad's lock is read through the modes list, as Mode(ModeNumLock). It is
+// answerable on every system, including the ones that have no NumLock: there
+// the pad is permanently locked and this permanently says so, which is what
+// those caps do. It starts out on, before anything has been typed, because a
+// locked pad is what the printed legends promise. See modes.go.
 
 // padTwins pairs the two keycodes of each dual-legend cap: the digit it shows
 // locked, and the navigation action it shows unlocked. Eleven caps, both ways.
@@ -225,10 +220,7 @@ func (h *Handler) applyPadLock(keycode int) int {
 	return keycode
 }
 
-// announceNumLock fires OnNumLock outside the handler's lock, so a consumer is
-// free to call back in.
+// announceNumLock publishes the pad's lock as the mode it is.
 func (h *Handler) announceNumLock(on bool) {
-	if h.OnNumLock != nil {
-		h.OnNumLock(on)
-	}
+	h.announceMode(Mode{ModeNumLock, modeValue(on)})
 }

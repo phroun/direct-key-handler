@@ -55,14 +55,15 @@ type Handler struct {
 	// held keys. A browser does the same on blur.
 	OnFocus func(focused bool)
 
-	// OnNumLock is called when the pad's lock moves, with its new state. Not a
-	// key: the cap that moves it is eaten (see numlock.go) and nothing is sent
-	// to the Keys channel for it.
+	// OnMode is called when a keyboard STATE moves — the pad's lock, CapsLock,
+	// focus, or one a host published itself. Not a key: the cap that moves the
+	// pad's lock is eaten (see numlock.go) and nothing is sent to the Keys
+	// channel for any of them. See modes.go.
 	//
-	// It fires on a system that has no NumLock of its own too, where this
+	// The pad's lock fires on a system that has none of its own too, where this
 	// package keeps the state — so a host can show an indicator on a Mac, which
 	// is the one place the OS offers none.
-	OnNumLock func(on bool)
+	OnMode func(m Mode)
 
 	// OnClipboard is called with an OSC 52 clipboard *response*
 	// (ESC ] 52 ; <selection> ; <base64> BEL/ST) - the terminal's answer to a
@@ -157,6 +158,18 @@ type Handler struct {
 	// numLock is what we know about the pad's lock, and on a system that has
 	// no lock of its own it IS the lock. See numlock.go. Guarded by mu.
 	numLock numLockState
+
+	// caps and focus are the other two states published as modes, and unlike
+	// the pad's lock neither is knowable until something says so: CapsLock
+	// rides in on a key, focus in on a report the terminal only sends if it
+	// was asked. See modes.go. Guarded by mu.
+	caps  modeLatch
+	focus modeLatch
+
+	// extraModes are the states a HOST published through SetMode, which this
+	// package stores and reports without knowing what any of them mean.
+	// Guarded by mu.
+	extraModes map[string]string
 
 	// sides is which side of each doubling modifier is held, for the Hyper
 	// promotion. See hyper.go. Guarded by mu.
@@ -2327,6 +2340,12 @@ func (h *Handler) handleFocusReport(focused bool) {
 		h.ReleaseHeldKeys()
 		h.forgetModifierSides()
 	}
+	// Focus is a state as much as an event, and something watching the modes
+	// for a status bar should not also have to wire up OnFocus. A game that
+	// pauses when the window goes away can read it either way.
+	if h.noteFocus(focused) {
+		h.announceMode(Mode{ModeFocus, modeValue(focused)})
+	}
 	if h.OnFocus != nil {
 		h.OnFocus(focused)
 	}
@@ -2401,6 +2420,12 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	// has a lock is a pad key, not the lock cap. See numlock.go.
 	if changed, on := h.noteNumLock(keycode, mod); changed {
 		h.announceNumLock(on)
+	}
+
+	// The other latch in the same field. It names no key — a capital arrives
+	// as a capital — so nothing below reads it; it is here to be published.
+	if changed, on := h.noteCapsLock(mod); changed {
+		h.announceMode(Mode{ModeCapsLock, modeValue(on)})
 	}
 
 	// The lock cap pressed alone is not a key: it moves the lock and is eaten.

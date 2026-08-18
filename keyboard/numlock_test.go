@@ -10,8 +10,8 @@ import (
 // numLockProbe feeds raw input and returns the key names emitted alongside
 // every lock state announced, in order.
 //
-// OnNumLock runs on the handler's own goroutine, as OnKey and OnFocus do, so
-// what it collects is shared and guarded here.
+// OnMode runs on the handler's own goroutine, as OnKey and OnFocus do, so what
+// it collects is shared and guarded here.
 func numLockProbe(t *testing.T, raw string) (keys []string, locks []bool, h *Handler) {
 	t.Helper()
 	pr, pw := io.Pipe()
@@ -19,10 +19,13 @@ func numLockProbe(t *testing.T, raw string) (keys []string, locks []bool, h *Han
 	h = New(Options{InputReader: pr, ManageTerminal: &manage})
 	done := make(chan struct{})
 	var mu sync.Mutex
-	h.OnNumLock = func(on bool) {
+	h.OnMode = func(m Mode) {
+		if m.Name != ModeNumLock {
+			return
+		}
 		mu.Lock()
 		defer mu.Unlock()
-		locks = append(locks, on)
+		locks = append(locks, m.Value == ModeOn)
 	}
 	if err := h.Start(); err != nil {
 		t.Fatal(err)
@@ -135,7 +138,7 @@ func TestALatchlessSystemIsDetectedFromAPadKey(t *testing.T) {
 	if len(keys) != 1 || keys[0] != "P-7" {
 		t.Fatalf("the pad key itself -> %v, want [P-7]", keys)
 	}
-	if !h.NumLock() {
+	if v, _ := h.Mode(ModeNumLock); v != ModeOn {
 		t.Error("a pad with no latch reports unlocked; it is permanently locked")
 	}
 
@@ -154,7 +157,7 @@ func TestALatchlessSystemIsDetectedFromAPadKey(t *testing.T) {
 func TestARealLatchOverrulesOurOwnCount(t *testing.T) {
 	// P-Home (57423) is the unlocked legend: a latch exists and is off.
 	_, _, h := numLockProbe(t, "\x1b[57423u")
-	if h.NumLock() {
+	if v, _ := h.Mode(ModeNumLock); v == ModeOn {
 		t.Fatal("a navigation legend arrived and the pad still reports locked")
 	}
 
@@ -181,7 +184,7 @@ func TestThePadStartsLocked(t *testing.T) {
 	manage := false
 	pr, _ := io.Pipe()
 	h := New(Options{InputReader: pr, ManageTerminal: &manage})
-	if !h.NumLock() {
+	if v, _ := h.Mode(ModeNumLock); v != ModeOn {
 		t.Error("a fresh handler reports the pad unlocked")
 	}
 }
@@ -202,7 +205,7 @@ func TestASimulatedLockRenamesThePad(t *testing.T) {
 	if len(keys) != 1 || keys[0] != "P-7" {
 		t.Fatalf("first pad key -> %v, want [P-7]", keys)
 	}
-	if !h.NumLock() {
+	if v, _ := h.Mode(ModeNumLock); v != ModeOn {
 		t.Fatal("a pad with no latch reports unlocked")
 	}
 
@@ -217,8 +220,8 @@ func TestASimulatedLockRenamesThePad(t *testing.T) {
 	if len(locks) != 1 || locks[0] {
 		t.Errorf("announced %v, want exactly one state, off", locks)
 	}
-	if h.NumLock() {
-		t.Error("NumLock() still reports locked after the toggle")
+	if v, _ := h.Mode(ModeNumLock); v == ModeOn {
+		t.Error("the num mode still reports locked after the toggle")
 	}
 
 	// And back again, which is the half that would break if the digit's own
