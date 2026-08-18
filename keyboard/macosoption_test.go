@@ -36,13 +36,13 @@ func optionProbe(t *testing.T, raw string) []string {
 
 // A backtick is a backtick.
 //
-// The Option table recognizes a CHARACTER, because the byte path carries no
-// modifier field — so it can only hold characters that Option alone produces.
-// '`' was in it, and a plain backtick came out "M-`": a key pressed all day
-// reported as a chord almost nobody presses. It also split the press from its
-// release, since the release replays the name recorded before the rewrite and
-// the suffix hides it from the rewrite the second time: "M-`" down, "`:Release"
-// up, for one press of one key.
+// The Option table recognizes a CHARACTER, because this path carries no
+// modifier field — so an ASCII entry cannot be told from ordinary typing, and
+// decoding one swallows the plain key. A backtick came out "M-`": a key pressed
+// all day reported as a chord almost nobody presses. It also split the press
+// from its release, since the release replays the name recorded before the
+// rewrite and the suffix hides it from the rewrite the second time: "M-`" down,
+// "`:Release" up, for one press of one key.
 func TestPlainBacktickIsNotAChord(t *testing.T) {
 	for _, tc := range []struct{ raw, want, what string }{
 		{"`", "`", "a bare byte, no protocol"},
@@ -86,13 +86,26 @@ func TestOptionCharactersStillDecode(t *testing.T) {
 	}
 }
 
-// No entry may be keyed on a character an unmodified key produces. Every such
-// entry silently takes that key away from the user.
-func TestNoOptionEntryStealsAPlainKey(t *testing.T) {
-	for r, name := range macOSOptionChars {
-		if r < 128 {
-			t.Errorf("%q maps to %q, but %q is what the plain key emits — "+
-				"the table cannot tell them apart, so the key loses", r, name, r)
+// The decoder never rewrites an ASCII character, whatever the table says.
+//
+// The rule is the guard, not the table's contents: an entry may be added for
+// documentation or to mirror the graphical host, and it stays inert. Testing
+// the guard rather than the table is what keeps the two hosts from drifting —
+// kittytk's decodeMacOSOptionChar applies exactly this rule to its own copy.
+func TestTheDecoderLeavesASCIIAlone(t *testing.T) {
+	for r := rune(0); r < 0x80; r++ {
+		if decoded, ok := decodeOptionChar(r); ok {
+			t.Errorf("%q decoded as %q; an ASCII character is ordinary typing "+
+				"on this path and cannot be told from a chord", r, decoded)
+		}
+	}
+
+	// And the entries the guard makes inert are still there, so the table
+	// remains the inverse of the sequence processor's insert table.
+	for _, r := range []rune{'`'} {
+		if _, ok := macOSOptionChars[r]; !ok {
+			t.Errorf("the table lost its %q entry; it is the inverse of the "+
+				"insert layer's, which still carries it", r)
 		}
 	}
 }

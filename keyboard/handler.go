@@ -544,11 +544,9 @@ var controlKeys = map[byte]string{
 // macOSOptionChars maps Unicode characters produced by macOS Option+key to M-key notation
 // This is for US keyboard layout
 //
-// Every entry must be a character that ONLY Option can produce. The table works
-// by recognizing the character alone — there is no modifier field on the byte
-// path — so an entry keyed on something an unmodified key also produces takes
-// that plain key away from the user, and gives them a chord they did not press.
-// '`' was such an entry; see TestPlainBacktickIsNotAChord.
+// Read through decodeOptionChar, never directly: an entry keyed on an ASCII
+// character is INERT, because a terminal delivers those for ordinary typing too
+// and there is no modifier field on this path to tell the two apart.
 var macOSOptionChars = map[rune]string{
 	// Lowercase Option+letter
 	'å': "M-a", // Option+a
@@ -629,12 +627,33 @@ var macOSOptionChars = map[rune]string{
 	'≤':      "M-,",  // Option+comma
 	'≥':      "M-.",  // Option+period
 	'÷':      "M-/",  // Option+slash
+	'`':      "M-`",  // Option+backtick (grave dead key; ASCII, so inert — see decodeOptionChar)
+}
 
-	// No entry for '`'. Option+backtick emits a plain backtick on the layouts
-	// where it emits anything at all, so this table cannot tell the chord from
-	// the key — and when it cannot tell, the key wins: one is pressed all day
-	// and the other almost never. Under the kitty protocol the modifier field
-	// says which it was, and M-` arrives correctly without this table.
+// decodeOptionChar returns the M-key notation for a character macOS Option
+// composed, or "" and false for ordinary text.
+//
+// ONLY non-ASCII runes decode. Every genuine Option composition on a US layout
+// yields a non-ASCII symbol; the table's ASCII entries collide with characters
+// a terminal also delivers for ordinary, unmodified typing, and this path has
+// no modifier field to tell the two apart. Guarding on the high bit keeps those
+// keystrokes literal while still catching every real Mega chord.
+//
+// The entries stay in the table rather than being deleted. They document what
+// Option produces for that key, they are the inverse of the sequence
+// processor's insert table entry for entry, and where the modifier IS reported
+// — the kitty protocol's own bits, or SDL's KMOD_ALT — the chord is named from
+// that and never needs this lookup at all.
+//
+// This is the rule the graphical host already applies to the same table
+// (kittytk sdl/macoption_sdl.go, decodeMacOSOptionChar); the two hosts must
+// agree, or one of them swallows a plain backtick and the other does not.
+func decodeOptionChar(r rune) (string, bool) {
+	if r < 0x80 {
+		return "", false
+	}
+	decoded, ok := macOSOptionChars[r]
+	return decoded, ok
 }
 
 // readLoop continuously reads raw bytes from input
@@ -1162,7 +1181,7 @@ func (h *Handler) emitKey(key string) {
 	if decodeMacOS && len(key) > 0 {
 		r, size := utf8.DecodeRuneInString(key)
 		if size == len(key) && r != utf8.RuneError {
-			if decoded, ok := macOSOptionChars[r]; ok {
+			if decoded, ok := decodeOptionChar(r); ok {
 				key = decoded
 			}
 		}
@@ -2575,7 +2594,7 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	if decodeMacOS && len(baseName) > 0 {
 		r, size := utf8.DecodeRuneInString(baseName)
 		if size == len(baseName) && r != utf8.RuneError { // Single rune
-			if decoded, exists := macOSOptionChars[r]; exists {
+			if decoded, exists := decodeOptionChar(r); exists {
 				// decoded is like "M-e" or "M-A"
 				if len(decoded) >= 3 && decoded[0] == 'M' && decoded[1] == '-' {
 					baseChar := decoded[2:]
