@@ -946,16 +946,18 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 
 	// Handle control characters
 	if b < 32 || b == 127 {
-		if key, ok := controlKeys[b]; ok {
-			h.emitKey(key)
-		} else {
-			h.emitKey(fmt.Sprintf("^%c", b+64))
+		key, ok := controlKeys[b]
+		if !ok {
+			key = fmt.Sprintf("^%c", b+64)
 		}
+		h.holdByteKey(b, key)
+		h.emitKey(key)
 		return
 	}
 
 	// Regular printable character or start of UTF-8 sequence
 	if b < 128 {
+		h.holdByteKey(b, string(b))
 		h.emitKey(string(b))
 		return
 	}
@@ -2202,6 +2204,38 @@ func csiKeyIdentity(seq string) (identity string, eventType int, ok bool) {
 	}
 }
 
+// holdByteKey remembers a name for a press that arrived as a plain BYTE.
+//
+// With event reporting on but disambiguation off — what a host asks for when it
+// wants presses to stay byte-identical — a text key is split across two
+// channels: it goes DOWN as a byte and comes UP as "CSI <keycode> ; <mod> : 3
+// u". Nothing else in this package sees both, so without this the press of
+// every letter, digit and symbol went unrecorded and its release matched
+// nothing.
+//
+// The identity is the keycode kitty will use, which is the key's BASE
+// character: the lowercase letter for a letter, and for a control byte the
+// letter it is Control of, since Ctrl-L is the "l" key with a modifier. Shifted
+// punctuation cannot be mapped back without knowing the layout — "%" is Shift+5
+// only on some keyboards — so those simply do not match, and the release falls
+// back to the name derived from the sequence rather than being lost.
+func (h *Handler) holdByteKey(b byte, name string) {
+	var keycode int
+	switch {
+	case b >= 0x01 && b <= 0x1A:
+		keycode = int('a' + b - 1) // Ctrl-A..Ctrl-Z are the letter keys
+	case b >= 'A' && b <= 'Z':
+		keycode = int(b - 'A' + 'a')
+	case b >= 32 && b < 127:
+		keycode = int(b)
+	default:
+		return
+	}
+	h.mu.Lock()
+	h.heldKeys["u:"+strconv.Itoa(keycode)] = name
+	h.mu.Unlock()
+}
+
 // recordHeld remembers a name as this key's, for a press that reached the
 // caller by a route with no event type to read — the literal-sequence table.
 func (h *Handler) recordHeld(seq, name string) {
@@ -2234,6 +2268,18 @@ func (h *Handler) reconcileHeld(seq, name string) (string, bool) {
 	case 3: // release
 		held, ok := h.heldKeys[identity]
 		if !ok {
+			// Dropping rests on "no entry means no press was emitted", and
+			// that holds only where a press is ALWAYS a sequence — the cursor,
+			// tilde and F1-F4 families. The "u" family is different: with
+			// disambiguation off a text key goes down as a byte, and although
+			// holdByteKey records what it can, a shifted punctuation key
+			// cannot be mapped back to its keycode without knowing the layout.
+			// Dropping there would lose a real release, so the derived name
+			// stands instead. That is the old behaviour, kept exactly where
+			// the premise for replacing it does not hold.
+			if strings.HasPrefix(identity, "u:") {
+				return name, true
+			}
 			// Consumed and emitted as nothing — NOT "not a key". Answering
 			// false sends the caller back to read the sequence byte by byte,
 			// which turns a dropped release into a phantom Escape followed by
