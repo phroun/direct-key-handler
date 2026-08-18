@@ -185,3 +185,70 @@ func TestThePadStartsLocked(t *testing.T) {
 		t.Error("a fresh handler reports the pad unlocked")
 	}
 }
+
+// A simulated lock has to CHANGE WHAT THE PAD IS CALLED, or it is a counter and
+// nothing else.
+//
+// Eating the cap and toggling a number was only ever half of it. Where the
+// system keeps its own lock the terminal resolves each dual-legend cap for us —
+// 57406 is the pad's 7, 57423 is the same cap's Home — but where there is none
+// it cannot, and sends the locked keycode always. So the toggle was invisible:
+// the pad went on saying P-7 however many times Clear was pressed.
+func TestASimulatedLockRenamesThePad(t *testing.T) {
+	// A digit with the latch bit clear settles that this system has no lock,
+	// and a pad with no lock is permanently numeric — which is what its caps
+	// say, so the first keystroke reads as itself.
+	keys, _, h := numLockProbe(t, "\x1b[57406u")
+	if len(keys) != 1 || keys[0] != "P-7" {
+		t.Fatalf("first pad key -> %v, want [P-7]", keys)
+	}
+	if !h.NumLock() {
+		t.Fatal("a pad with no latch reports unlocked")
+	}
+
+	// Now the whole gesture, in one stream: the cap, then the same keycode
+	// again. The cap is eaten and the pad answers to its other legend.
+	keys, locks, h := numLockProbe(t, "\x1b[57406u\x1b[57360u\x1b[57406u")
+	want := []string{"P-7", "P-Home"}
+	if len(keys) != 2 || keys[0] != want[0] || keys[1] != want[1] {
+		t.Errorf("digit, Clear, digit -> %v, want %v — the lock cap was eaten "+
+			"but the pad kept its locked name", keys, want)
+	}
+	if len(locks) != 1 || locks[0] {
+		t.Errorf("announced %v, want exactly one state, off", locks)
+	}
+	if h.NumLock() {
+		t.Error("NumLock() still reports locked after the toggle")
+	}
+
+	// And back again, which is the half that would break if the digit's own
+	// arrival were still read as evidence: a terminal with no latch sends the
+	// locked keycode whatever the lock is doing, so treating it as proof would
+	// undo the toggle on the very next keystroke.
+	keys, _, _ = numLockProbe(t,
+		"\x1b[57406u\x1b[57360u\x1b[57406u\x1b[57406u\x1b[57360u\x1b[57406u")
+	want = []string{"P-7", "P-Home", "P-Home", "P-7"}
+	if len(keys) != 4 {
+		t.Fatalf("two toggles -> %v, want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Errorf("key %d = %q, want %q (got %v)", i, keys[i], want[i], keys)
+		}
+	}
+}
+
+// Where the system HAS a lock, the terminal has already resolved the cap and
+// this package must not resolve it again.
+func TestARealLatchIsNotReResolved(t *testing.T) {
+	// The bit proves a real latch. The pad then arrives already correct.
+	keys, _, _ := numLockProbe(t, "\x1b[97;129u\x1b[57406;129u")
+	if len(keys) != 2 || keys[1] != "P-7" {
+		t.Errorf("with a real latch on -> %v, want the pad key to stay P-7", keys)
+	}
+	// And unlocked, where the terminal sends the navigation keycode itself.
+	keys, _, _ = numLockProbe(t, "\x1b[57423u")
+	if len(keys) != 1 || keys[0] != "P-Home" {
+		t.Errorf("a navigation legend -> %v, want [P-Home]", keys)
+	}
+}
