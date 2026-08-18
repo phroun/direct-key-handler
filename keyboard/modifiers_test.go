@@ -2,10 +2,9 @@ package keyboard
 
 import "testing"
 
-// The kitty protocol reports eight modifier bits. Four of them were decoded and
-// two were dropped on the floor, so a Hyper or a true-Meta chord arrived
-// indistinguishable from the unmodified key — which made "H-" look vestigial to
-// every consumer downstream when it was really unimplemented here.
+// Every modifier bit the kitty protocol reports has a spelling here. A bit that
+// went undecoded would not be an approximation of the chord — the key would
+// arrive indistinguishable from the unmodified one.
 //
 // mod is the wire value: the bitmask plus one.
 func TestModifierPrefixDecodesEveryBit(t *testing.T) {

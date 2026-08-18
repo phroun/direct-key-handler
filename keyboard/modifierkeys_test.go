@@ -27,36 +27,49 @@ func decodeModifierKey(t *testing.T, raw string) []string {
 	}
 }
 
-// A modifier key's own press and release name that key with the SAME letter
-// its prefix uses.
+// A modifier key pressed on its own is named for the side it sits on and the
+// letter its prefix uses: LMod:S is the left Shift.
 //
-// Two were wrong. Mega emitted "A", a prefix this vocabulary does not have at
-// all — key-sequence-processor has no rank for "A-" and a test asserting it
-// never gains one, so a Mega press could not match a binding no matter how it
-// was written. Micro emitted "M", taking the letter that belongs to Mega, so
-// the two keys collided in the one place they are reported separately.
-//
-// The letters have to agree with the prefixes because a consumer learns the
-// vocabulary once: something that knows "M-x" is Mega must not meet a second
-// spelling for the same key here.
-func TestModifierKeysUseTheirOwnPrefixLetter(t *testing.T) {
+// The side leads because it is what the event is FOR — a chord already carries
+// which modifiers were held, so a modifier reporting itself is only worth
+// hearing when you want to know which of the two caps it was. The letter has to
+// agree with the prefix because a consumer learns the vocabulary once:
+// something that knows "M-x" is Mega must not meet a second spelling here.
+func TestModifierKeysNameTheirSideAndPrefixLetter(t *testing.T) {
 	for _, c := range []struct{ raw, want, what string }{
-		{"\x1b[57441;1:1u", "S-Press:Left", "Shift"},
-		{"\x1b[57442;1:1u", "C-Press:Left", "Control"},
-		{"\x1b[57443;1:1u", "M-Press:Left", "Mega — was \"A-\", a prefix that does not exist"},
-		{"\x1b[57444;1:1u", "s-Press:Left", "Super"},
-		{"\x1b[57445;1:1u", "H-Press:Left", "Hyper"},
-		{"\x1b[57446;1:1u", "m-Press:Left", "Micro — was \"M-\", which belongs to Mega"},
+		{"\x1b[57441;1:1u", "LMod:S", "Shift"},
+		{"\x1b[57442;1:1u", "LMod:C", "Control"},
+		{"\x1b[57443;1:1u", "LMod:M", "Mega"},
+		{"\x1b[57444;1:1u", "LMod:s", "Super"},
+		{"\x1b[57445;1:1u", "LMod:H", "Hyper"},
+		{"\x1b[57446;1:1u", "LMod:m", "Micro"},
 
-		{"\x1b[57449;1:1u", "M-Press:Right", "Mega, right side"},
-		{"\x1b[57452;1:1u", "m-Press:Right", "Micro, right side"},
+		{"\x1b[57449;1:1u", "RMod:M", "Mega, right side"},
+		{"\x1b[57452;1:1u", "RMod:m", "Micro, right side"},
 
-		{"\x1b[57443;1:3u", "M-Release:Left", "Mega release"},
-		{"\x1b[57443;1:2u", "M-Repeat:Left", "Mega repeat"},
+		{"\x1b[57443;1:3u", "LMod:M:Release", "Mega release"},
 	} {
 		got := decodeModifierKey(t, c.raw)
 		if len(got) != 1 || got[0] != c.want {
 			t.Errorf("%s: %q decoded as %v, want [%s]", c.what, c.raw, got, c.want)
+		}
+	}
+}
+
+// A held modifier does not repeat.
+//
+// The terminal repeats it as readily as any other key, but nothing has changed
+// between one report and the next: the modifier was down and it still is. A
+// repeat is worth hearing when the key produces something each time; a modifier
+// produces nothing on its own, so its repeats are only noise on the channel.
+func TestModifierKeysDoNotRepeat(t *testing.T) {
+	for _, raw := range []string{
+		"\x1b[57443;1:2u", // Mega, left
+		"\x1b[57441;1:2u", // Shift, left
+		"\x1b[57448;1:2u", // Control, right
+	} {
+		if got := decodeModifierKey(t, raw); len(got) != 0 {
+			t.Errorf("%q repeated as %v, want nothing", raw, got)
 		}
 	}
 }
@@ -86,11 +99,9 @@ func TestMegaAndMicroStayApart(t *testing.T) {
 
 // No key this package emits carries an "A-" prefix.
 //
-// "A-" is not in namePrefixes and never was; it reached the wire only from the
-// modifier-key table, which had been written in the protocol's vocabulary
-// ("alt") rather than this one. Nothing downstream can parse it: it is not a
-// modifier to key-sequence-processor, so it becomes part of the base name and
-// matches nothing.
+// "A-" is not in namePrefixes and nothing downstream can parse it: it is not a
+// modifier to key-sequence-processor, so it would become part of the base name
+// and match nothing. Alt is spelled "M-", for Mega.
 func TestNothingEmitsAnAPrefix(t *testing.T) {
 	for code := 57441; code <= 57452; code++ {
 		for _, event := range []string{"1", "2", "3"} {

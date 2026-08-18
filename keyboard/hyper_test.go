@@ -42,6 +42,27 @@ func TestHyperFromADoubledSideModifier(t *testing.T) {
 			raw:  "\x1b[120;3u", want: "M-H-x",
 			what: "LCtrl+RCtrl+Mega+X",
 		},
+		{
+			// Super doubles too: both Command caps, or both Windows caps.
+			// Like Ctrl and Mega it sits on both sides of the space bar, which
+			// is what makes holding the pair a gesture rather than an accident.
+			down: []string{"\x1b[57444;1u", "\x1b[57450;1u"}, // both Super
+			raw:  "\x1b[120;9u", want: "H-x",
+			what: "LSuper+RSuper+X",
+		},
+		{
+			// And a doubled Super beside a single Ctrl keeps the caret.
+			down: []string{"\x1b[57444;1u", "\x1b[57450;1u"},
+			raw:  "\x1b[120;13u", want: "H-^X",
+			what: "LSuper+RSuper+Ctrl+X",
+		},
+		{
+			// A doubled Ctrl beside a single Super: the Super survives and
+			// sorts before Hyper.
+			down: []string{"\x1b[57442;1u", "\x1b[57448;1u"},
+			raw:  "\x1b[120;9u", want: "s-H-x",
+			what: "LCtrl+RCtrl+Super+X",
+		},
 	} {
 		got := feedHyper(t, append(append([]string{}, tc.down...), tc.raw)...)
 		if len(got) == 0 || got[len(got)-1] != tc.want {
@@ -85,7 +106,8 @@ func TestReleasingASideEndsTheHyper(t *testing.T) {
 	// counting back from the end.
 	var xs []string
 	for _, k := range got {
-		if !strings.HasSuffix(k, ":Left") && !strings.HasSuffix(k, ":Right") {
+		if !strings.HasPrefix(k, "LMod:") && !strings.HasPrefix(k, "RMod:") &&
+			!strings.HasPrefix(k, "Mod:") {
 			xs = append(xs, k)
 		}
 	}
@@ -95,7 +117,7 @@ func TestReleasingASideEndsTheHyper(t *testing.T) {
 }
 
 // Shift never doubles into Hyper: it produces text, and a doubled Shift would
-// swallow ordinary capital letters typed with both hands.
+// swallow the capital letters most people type with both hands.
 func TestShiftDoesNotDoubleIntoHyper(t *testing.T) {
 	got := feedHyper(t,
 		"\x1b[57441;1u", // LShift down
@@ -104,6 +126,19 @@ func TestShiftDoesNotDoubleIntoHyper(t *testing.T) {
 	)
 	if len(got) == 0 || got[len(got)-1] != "A" {
 		t.Errorf("both Shifts then a -> %v, want the last to be \"A\"", got)
+	}
+}
+
+// Micro does not double either. A keyboard that has it at all rarely has two,
+// so the gesture would exist on almost no hardware.
+func TestMicroDoesNotDoubleIntoHyper(t *testing.T) {
+	got := feedHyper(t,
+		"\x1b[57446;1u", // LMicro down
+		"\x1b[57452;1u", // RMicro down
+		"\x1b[120;33u",  // x with micro -> "m-x", not "H-x"
+	)
+	if len(got) == 0 || got[len(got)-1] != "m-x" {
+		t.Errorf("both Micros then x -> %v, want the last to be \"m-x\"", got)
 	}
 }
 
