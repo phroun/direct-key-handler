@@ -543,6 +543,12 @@ var controlKeys = map[byte]string{
 
 // macOSOptionChars maps Unicode characters produced by macOS Option+key to M-key notation
 // This is for US keyboard layout
+//
+// Every entry must be a character that ONLY Option can produce. The table works
+// by recognizing the character alone — there is no modifier field on the byte
+// path — so an entry keyed on something an unmodified key also produces takes
+// that plain key away from the user, and gives them a chord they did not press.
+// '`' was such an entry; see TestPlainBacktickIsNotAChord.
 var macOSOptionChars = map[rune]string{
 	// Lowercase Option+letter
 	'å': "M-a", // Option+a
@@ -623,7 +629,12 @@ var macOSOptionChars = map[rune]string{
 	'≤':      "M-,",  // Option+comma
 	'≥':      "M-.",  // Option+period
 	'÷':      "M-/",  // Option+slash
-	'`':      "M-`",  // Option+backtick (same as backtick on some layouts)
+
+	// No entry for '`'. Option+backtick emits a plain backtick on the layouts
+	// where it emits anything at all, so this table cannot tell the chord from
+	// the key — and when it cannot tell, the key wins: one is pressed all day
+	// and the other almost never. Under the kitty protocol the modifier field
+	// says which it was, and M-` arrives correctly without this table.
 }
 
 // readLoop continuously reads raw bytes from input
