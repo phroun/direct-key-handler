@@ -62,30 +62,35 @@ func TestARepeatKeepsThePressName(t *testing.T) {
 	}
 }
 
-// A release with no press is dropped, and dropped means CONSUMED.
+// An unmatched release is never re-read as bytes, whichever way it is handled.
 //
-// Safe by construction rather than by luck: the table holds exactly what this
-// package emitted, so no entry means no press was ever reported for that key
-// and nothing downstream can be holding it.
-//
-// Consumed is the other half. Answering "not a key" sends the caller back to
-// re-read the sequence byte by byte, which turns a dropped release into a
-// phantom Escape followed by its digits typed as text — worse than the mismatch
-// it was meant to prevent, and in a modal editor it leaves the mode.
-func TestAnUnmatchedReleaseIsDroppedNotReReadAsBytes(t *testing.T) {
-	if got := feedKeys(t, "\x1b[97;1:3u"); len(got) != 0 {
-		t.Errorf("a release with no press produced %v, want nothing at all", got)
+// Answering "not a key" sends the caller back to read the sequence byte by
+// byte, which turns the release into a phantom Escape followed by its digits
+// typed as text — worse than the mismatch it was meant to prevent, and in a
+// modal editor it leaves the mode. Whether the release is dropped or falls back
+// to its derived name, it must be CONSUMED either way.
+func TestAnUnmatchedReleaseIsNeverReReadAsBytes(t *testing.T) {
+	for _, raw := range []string{
+		"\x1b[97;1:3u", // the "u" family: falls back to a derived name
+		"\x1b[1;1:3A",  // the cursor family: dropped
+		"\x1b[5;1:3~",  // the tilde family: dropped
+		"\x1b[1;1:3P",  // F1-F4: dropped
+	} {
+		for _, got := range feedKeys(t, raw) {
+			if len(got) > 1 && (got == "Escape" || got == "[") {
+				t.Errorf("%q was re-read as bytes: %v", raw, feedKeys(t, raw))
+			}
+			if got == "Escape" {
+				t.Errorf("%q produced a phantom Escape", raw)
+			}
+		}
 	}
-	// A double release: the first consumes the entry, the second has none.
-	got := feedKeys(t, "\x1b[97;5u\x1b[97;1:3u\x1b[97;1:3u")
-	want := []string{"^A", "^A:Release"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("press and two releases -> %v, want %v", got, want)
-	}
-	// An orphan release must not disturb the pair that follows it.
-	got = feedKeys(t, "\x1b[98;1:3u\x1b[97;5u\x1b[97;1:3u")
-	if len(got) != 2 || got[0] != "^A" || got[1] != "^A:Release" {
-		t.Errorf("orphan release then a real pair -> %v, want [^A ^A:Release]", got)
+
+	// An orphan does not disturb the pair that follows it, whichever way it
+	// was handled.
+	got := feedKeys(t, "\x1b[98;1:3u\x1b[97;5u\x1b[97;1:3u")
+	if len(got) < 2 || got[len(got)-2] != "^A" || got[len(got)-1] != "^A:Release" {
+		t.Errorf("orphan release then a real pair -> %v, want it to end [^A ^A:Release]", got)
 	}
 }
 
@@ -181,6 +186,67 @@ func TestAPressSpelledLiterallyIsStillHeld(t *testing.T) {
 	}
 }
 
+// A text key goes DOWN as a byte and comes UP as a sequence, and both halves
+// have to find each other.
+//
+// With event reporting on but disambiguation off — what a host asks for when it
+// wants presses to stay byte-identical — a letter's press is the byte "l" while
+// its release is "CSI 108;1:3u". Nothing else in this package sees both. So
+// every letter, digit and symbol went down unrecorded, and once an unmatched
+// release was being dropped, every one of those releases vanished: a hosted
+// browser was back to never seeing a keyup for ordinary typing, which is the
+// bug the whole release chain was built to fix.
+func TestATextKeyPressedAsAByteIsReleasedByItsSequence(t *testing.T) {
+	for _, tc := range []struct {
+		raw, want, what string
+	}{
+		{"l\x1b[108;1:3u", "l:Release", "a letter"},
+		{"o\x1b[111;1:3u", "o:Release", ""},
+		{".\x1b[46;1:3u", ".:Release", "and punctuation"},
+		{"5\x1b[53;1:3u", "5:Release", "and a digit"},
+		// The keycode is the BASE key, so a capital's release reports 108 —
+		// the "l" key — with Shift in the modifier field. Recording under the
+		// byte 'L' alone would never have matched it.
+		{"L\x1b[108;2:3u", "L:Release", "a capital, whose keycode is the lowercase"},
+		// Ctrl-L is byte 0x0C and the "l" key held with Control, so it records
+		// under the same keycode again.
+		{"\x0c\x1b[108;5:3u", "^L:Release", "a control byte"},
+		// And the mismatch fix still holds across the split: Control let go
+		// before the letter, so the release carries no modifier at all, and it
+		// still comes up named for the press.
+		{"\x0c\x1b[108;1:3u", "^L:Release", "with Control released first"},
+	} {
+		got := feedKeys(t, tc.raw)
+		if len(got) != 2 || got[1] != tc.want {
+			t.Errorf("%q (%s) -> %v, want the release to be %q",
+				tc.raw, tc.what, got, tc.want)
+		}
+	}
+}
+
+// Dropping an unmatched release is right only where a press is ALWAYS a
+// sequence.
+//
+// That is true of the cursor, tilde and F1-F4 families: every one of their
+// presses is recorded, so no entry really does mean no press was emitted. It is
+// NOT true of the "u" family, where a press may have been a byte and a shifted
+// punctuation key cannot be mapped back to its keycode without knowing the
+// layout — "%" is Shift+5 only on some keyboards. Dropping there would lose a
+// real release, so the derived name stands instead.
+func TestTheDropAppliesOnlyWhereAPressIsAlwaysASequence(t *testing.T) {
+	// The "u" family falls back rather than dropping.
+	if got := feedKeys(t, "\x1b[122;1:3u"); len(got) != 1 || got[0] != "z:Release" {
+		t.Errorf("an unmatched u-form release -> %v, want [z:Release]; dropping it "+
+			"would lose the release of any key whose press was a byte", got)
+	}
+	// The families whose presses are always sequences still drop.
+	for _, raw := range []string{"\x1b[1;1:3A", "\x1b[5;1:3~", "\x1b[1;1:3P"} {
+		if got := feedKeys(t, raw); len(got) != 0 {
+			t.Errorf("%q -> %v, want nothing: no press was ever emitted for it", raw, got)
+		}
+	}
+}
+
 // Losing focus releases every key still down.
 //
 // This is the one case dropping an unmatched release cannot cover: the key-up
@@ -206,11 +272,22 @@ func TestLosingFocusReleasesTheKeysStillDown(t *testing.T) {
 		}
 	}
 
-	// A key-up that does arrive after the flush is an orphan, so nothing is
-	// released twice. That is the drop rule doing exactly its job.
-	got = feedKeys(t, "\x1b[97;5u\x1b[O\x1b[97;1:3u")
+	// A key-up arriving after the flush is an orphan. On the families whose
+	// presses are always sequences it is dropped, so the key is released once.
+	got = feedKeys(t, "\x1b[1;1A\x1b[O\x1b[1;1:3A")
 	if len(got) != 2 {
-		t.Errorf("flush then a late release -> %v, want the key released once", got)
+		t.Errorf("flush then a late cursor release -> %v, want the key released once", got)
+	}
+	// On the "u" family it cannot be: a press there may have been a byte, so an
+	// absent entry is not evidence of an absent press, and the derived name has
+	// to stand. The cost is visible here — a key held across a blur is released
+	// by the flush and again if its key-up ever arrives. In practice the
+	// terminal has stopped sending us input by then, so the second one does not
+	// come; the alternative is losing every release whose press was a byte,
+	// which is the whole of ordinary typing.
+	got = feedKeys(t, "\x1b[97;5u\x1b[O\x1b[97;1:3u")
+	if len(got) != 3 || got[1] != "^A:Release" || got[2] != "a:Release" {
+		t.Errorf("flush then a late u-form release -> %v, want [^A ^A:Release a:Release]", got)
 	}
 
 	// GAINING focus releases nothing: the keys are still down, and a key held
