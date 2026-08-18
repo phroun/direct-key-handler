@@ -21,12 +21,18 @@ package keyboard
 
 // doubledSides tracks which side of each doubling modifier is currently held.
 //
-// Only Ctrl and Mega double. Shift is deliberately not among them: it produces
-// text, so a doubled Shift would swallow ordinary capital letters. Super and
-// Micro are left alone because a keyboard that has them at all rarely has two.
+// Ctrl, Mega and Super double: all three are commonly present twice, one on
+// each side of the space bar, which is what makes holding both a gesture rather
+// than an accident.
+//
+// Shift is deliberately not among them. It produces text, so a doubled Shift
+// would swallow every capital letter typed with both hands — which is how most
+// people type them. Micro is not either: a keyboard that has it at all rarely
+// has two, so the gesture would exist on almost no hardware.
 type doubledSides struct {
-	ctrlLeft, ctrlRight bool
-	megaLeft, megaRight bool
+	ctrlLeft, ctrlRight   bool
+	megaLeft, megaRight   bool
+	superLeft, superRight bool
 }
 
 // noteModifierSide records a modifier key going down or coming up.
@@ -52,16 +58,24 @@ func (h *Handler) noteModifierSide(name, side string, eventType int) {
 		} else {
 			h.sides.megaLeft = down
 		}
+	case "Super":
+		if side == "Right" {
+			h.sides.superRight = down
+		} else {
+			h.sides.superLeft = down
+		}
 	}
 }
 
 // promoteHyper rewrites a modifier value when a doubled side modifier is held,
 // spending the doubled one on Hyper and leaving everything else alone.
 //
-//	LCtrl+RCtrl+X      -> H-X     both Ctrl becomes Hyper
-//	LMega+RMega+X      -> H-X     both Mega becomes Hyper
-//	LMega+RMega+Ctrl+X -> H-^X    Hyper beside a single Ctrl
-//	LCtrl+RCtrl+Mega+X -> M-H-x   Hyper beside a single Mega
+//	LCtrl+RCtrl+X        -> H-X     both Ctrl becomes Hyper
+//	LMega+RMega+X        -> H-X     both Mega becomes Hyper
+//	LSuper+RSuper+X      -> H-x     both Super becomes Hyper
+//	LMega+RMega+Ctrl+X   -> H-^X    Hyper beside a single Ctrl
+//	LCtrl+RCtrl+Mega+X   -> M-H-x   Hyper beside a single Mega
+//	LCtrl+RCtrl+Super+X  -> s-H-x   Hyper beside a single Super
 //
 // The doubled modifier is CONSUMED, which is what makes the promotion a
 // promotion rather than an addition: LCtrl+RCtrl+X must not also be a Control
@@ -70,8 +84,9 @@ func (h *Handler) promoteHyper(mod int) int {
 	h.mu.Lock()
 	bothCtrl := h.sides.ctrlLeft && h.sides.ctrlRight
 	bothMega := h.sides.megaLeft && h.sides.megaRight
+	bothSuper := h.sides.superLeft && h.sides.superRight
 	h.mu.Unlock()
-	if !bothCtrl && !bothMega {
+	if !bothCtrl && !bothMega && !bothSuper {
 		return mod
 	}
 	if mod < 1 {
@@ -83,6 +98,9 @@ func (h *Handler) promoteHyper(mod int) int {
 	}
 	if bothMega {
 		bits &^= 2 // mega
+	}
+	if bothSuper {
+		bits &^= 8 // super
 	}
 	bits |= 16 // hyper
 	return bits + 1
