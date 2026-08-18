@@ -55,6 +55,15 @@ type Handler struct {
 	// held keys. A browser does the same on blur.
 	OnFocus func(focused bool)
 
+	// OnNumLock is called when the pad's lock moves, with its new state. Not a
+	// key: the cap that moves it is eaten (see numlock.go) and nothing is sent
+	// to the Keys channel for it.
+	//
+	// It fires on a system that has no NumLock of its own too, where this
+	// package keeps the state — so a host can show an indicator on a Mac, which
+	// is the one place the OS offers none.
+	OnNumLock func(on bool)
+
 	// OnClipboard is called with an OSC 52 clipboard *response*
 	// (ESC ] 52 ; <selection> ; <base64> BEL/ST) - the terminal's answer to a
 	// clipboard-read query. selection is the target byte ('c', 'p', ...) and
@@ -144,6 +153,10 @@ type Handler struct {
 	//
 	// Guarded by mu.
 	heldKeys map[string]string
+
+	// numLock is what we know about the pad's lock, and on a system that has
+	// no lock of its own it IS the lock. See numlock.go. Guarded by mu.
+	numLock numLockState
 
 	// Debug callback (optional)
 	debugFn func(string)
@@ -242,6 +255,10 @@ func New(opts Options) *Handler {
 		emitPasteKeys:     emitPasteKeys,
 		keyNames:          copyKeyNames(opts.KeyNames),
 		heldKeys:          make(map[string]string),
+		// A locked pad is what the printed legends promise, what every pad
+		// without a latch does permanently, and what a pad with one is in
+		// almost always. The first keystroke corrects it if not.
+		numLock: numLockState{on: true},
 	}
 
 	// Check if input is a terminal file descriptor
@@ -2017,7 +2034,7 @@ var kittySpecialKeys = map[int]string{
 	// Functional keys (Kitty extended codes)
 	57358: "CapsLock",
 	57359: "ScrollLock",
-	57360: "NumLock",
+	57360: "Clear", // pressed alone this never arrives: it is the pad lock
 	57361: "PrintScreen",
 	57362: "Pause",
 	57363: "Menu",
@@ -2296,7 +2313,14 @@ func (h *Handler) reconcileHeld(seq, name string) (string, bool) {
 		}
 		return name, true
 	default: // press
-		h.heldKeys[identity] = name
+		// A press that emitted NOTHING is not held. The lock cap is eaten
+		// (see numlock.go) and comes back as an empty name; recording it would
+		// put an empty entry under its identity, and the release that matched
+		// it would then come out as a bare ":Release" for a key nobody was
+		// ever told about — the very mismatch the registry exists to stop.
+		if name != "" {
+			h.heldKeys[identity] = name
+		}
 		return name, true
 	}
 }
@@ -2370,6 +2394,34 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 		} else {
 			mod = parseModifierParam(modPart)
 		}
+	}
+
+	// Every key says something about the pad's lock, so every key is read for
+	// it before anything else looks at the key itself. The lock decides what
+	// eleven other caps are CALLED, so it has to be current by the time one of
+	// them is named — and the keystroke that settles whether this system even
+	// has a lock is a pad key, not the lock cap. See numlock.go.
+	if changed, on := h.noteNumLock(keycode, mod); changed {
+		h.announceNumLock(on)
+	}
+
+	// The lock cap pressed alone is not a key: it moves the lock and is eaten.
+	// With a modifier held it is an ordinary key called Clear, and falls
+	// through to be named like any other.
+	//
+	// Every event type is eaten, not just the press — a repeat and a release of
+	// something that was never emitted must not be emitted either. Only the
+	// press moves the lock; a hold does not ratchet it.
+	if keycode == kittyClearKey && !heldModifier(mod) {
+		if eventType == 1 {
+			if changed, on := h.toggleNumLock(); changed {
+				h.announceNumLock(on)
+			}
+		}
+		// Consumed, emitting nothing — NOT "not a key". Answering false sends
+		// the caller back to read the sequence byte by byte, which turns this
+		// into a phantom Escape followed by its digits typed as text.
+		return "", true
 	}
 
 	// Check if this is a modifier key press/release

@@ -65,7 +65,11 @@ const (
 
 	KeyCapsLock
 	KeyScrollLock
-	KeyNumLock
+	// KeyClear is the cap HID calls "Num Lock and Clear". Pressed alone it is
+	// not a key at all — it moves the pad's lock and is eaten (see numlock.go);
+	// this names it only when a modifier is held, where it IS a key and Clear is
+	// what the keyboards without a lock behind it print on the cap.
+	KeyClear
 	KeyPrintScreen
 	KeyPause
 	KeyMenu
@@ -161,7 +165,7 @@ var defaultKeyNames = map[Key]string{
 
 	KeyCapsLock:    "CapsLock",
 	KeyScrollLock:  "ScrollLock",
-	KeyNumLock:     "NumLock",
+	KeyClear:       "Clear",
 	KeyPrintScreen: "PrintScreen",
 	KeyPause:       "Pause",
 	KeyMenu:        "Menu",
