@@ -158,6 +158,10 @@ type Handler struct {
 	// no lock of its own it IS the lock. See numlock.go. Guarded by mu.
 	numLock numLockState
 
+	// sides is which side of each doubling modifier is held, for the Hyper
+	// promotion. See hyper.go. Guarded by mu.
+	sides doubledSides
+
 	// Debug callback (optional)
 	debugFn func(string)
 }
@@ -2334,6 +2338,7 @@ func (h *Handler) reconcileHeld(seq, name string) (string, bool) {
 func (h *Handler) handleFocusReport(focused bool) {
 	if !focused {
 		h.ReleaseHeldKeys()
+		h.forgetModifierSides()
 	}
 	if h.OnFocus != nil {
 		h.OnFocus(focused)
@@ -2424,8 +2429,23 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 		return "", true
 	}
 
+	// A doubled side modifier means Hyper, which no keyboard here has a cap
+	// for. Done before anything reads the modifiers, so every formatter below
+	// sees the promoted set rather than the pair that produced it.
+	mod = h.promoteHyper(mod)
+
+	// And a dual-legend pad cap is resolved against the lock we keep, on a
+	// system that has none of its own. The terminal cannot do it there and
+	// sends the locked keycode always; without this the simulated lock moves a
+	// number and changes nothing anyone can see. See numlock.go.
+	keycode = h.applyPadLock(keycode)
+
 	// Check if this is a modifier key press/release
 	if modKeyInfo, ok := kittyModifierKeys[keycode]; ok {
+		// Which SIDE went down is the whole basis of the Hyper promotion, and
+		// these events are the only place the protocol says it. See hyper.go.
+		h.noteModifierSide(modKeyInfo.name, modKeyInfo.side, eventType)
+
 		// Map modifier names to our prefix convention.
 		//
 		// These are the same letters the modifier PREFIXES use, and they have to

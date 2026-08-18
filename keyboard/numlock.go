@@ -112,6 +112,13 @@ func (h *Handler) noteNumLock(keycode, mod int) (changed bool, on bool) {
 	case bit:
 		// The latch exists and it is on. Nothing else can produce this bit.
 		h.numLock.latchKnown, h.numLock.hasLatch, h.numLock.on = true, true, true
+	case h.numLock.latchKnown && !h.numLock.hasLatch:
+		// This system has no latch, so the state is OURS and nothing arriving
+		// can contradict it. Reading further evidence here would undo every
+		// toggle on the very next keystroke: a terminal with no latch to
+		// consult sends the LOCKED keycode for a dual-legend cap always, so
+		// the case below would keep concluding "locked" a moment after the
+		// user asked for the opposite.
 	case keycode >= kittyPadLockedLo && keycode <= kittyPadLockedHi:
 		// A digit with the bit clear: no latch on this system, and a pad with
 		// no latch is permanently locked, which is what its caps say.
@@ -160,6 +167,62 @@ func (h *Handler) NumLock() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.numLock.on
+}
+
+// padTwins pairs the two keycodes of each dual-legend cap: the digit it shows
+// locked, and the navigation action it shows unlocked. Eleven caps, both ways.
+//
+// A terminal resolves this itself where the SYSTEM has a lock to consult — it
+// sends 57406 for the pad's 7 and 57423 for the same cap's Home. Where there is
+// no lock it cannot, and sends the locked keycode always, which is correct for
+// a pad that is permanently numeric and useless for the one we simulate on top.
+var padTwins = map[int]int{
+	57399: 57425, // 0 . Insert
+	57400: 57424, // 1 . End
+	57401: 57420, // 2 . Down
+	57402: 57422, // 3 . PageDown
+	57403: 57417, // 4 . Left
+	57404: 57427, // 5 . Begin
+	57405: 57418, // 6 . Right
+	57406: 57423, // 7 . Home
+	57407: 57419, // 8 . Up
+	57408: 57421, // 9 . PageUp
+	57409: 57426, // . . Delete
+}
+
+func init() {
+	// Both directions, from one written-out table: a pairing stated twice is a
+	// pairing that can disagree with itself.
+	for locked, unlocked := range padTwins {
+		padTwins[unlocked] = locked
+	}
+}
+
+// applyPadLock re-resolves a dual-legend cap against the lock THIS package
+// keeps, and does nothing where the system keeps its own.
+//
+// This is what makes a simulated lock mean anything. Eating the cap and
+// counting the presses moves a number; it is this that turns the number into
+// the name the pad reports, which is the whole of what a lock does. Without it
+// the toggle was invisible: the terminal went on sending 57406, and the pad
+// went on saying P-7 however many times the user pressed Clear.
+func (h *Handler) applyPadLock(keycode int) int {
+	twin, dual := padTwins[keycode]
+	if !dual {
+		return keycode
+	}
+	h.mu.Lock()
+	ours := h.numLock.latchKnown && !h.numLock.hasLatch
+	on := h.numLock.on
+	h.mu.Unlock()
+	if !ours {
+		return keycode
+	}
+	locked := keycode >= kittyPadLockedLo && keycode <= kittyPadLockedHi
+	if locked != on {
+		return twin
+	}
+	return keycode
 }
 
 // announceNumLock fires OnNumLock outside the handler's lock, so a consumer is
