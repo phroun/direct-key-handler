@@ -275,8 +275,9 @@ func AllKeys() []Key {
 // above Enter, so that one is "p-," and the PC-98's is "P-,".
 var namePrefixes = []string{"S-", "M-", "m-", "C-", "s-", "H-", "G-", "P-", "p-"}
 
-// nameSuffixes are the event/side suffixes that can trail a base name.
-var nameSuffixes = []string{":Release", ":Repeat", ":Left", ":Right"}
+// nameSuffixes are the event suffixes that can trail a base name. A key's
+// press is its plain name; only the two things that are not a press say so.
+var nameSuffixes = []string{":Release", ":Repeat"}
 
 // copyKeyNames snapshots a caller's name table, dropping empty names, so a map
 // the caller keeps mutating can't change what the handler emits mid-run.

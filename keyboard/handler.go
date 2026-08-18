@@ -162,6 +162,18 @@ type Handler struct {
 	// promotion. See hyper.go. Guarded by mu.
 	sides doubledSides
 
+	// mouseHeld is the name this package EMITTED for each mouse button that is
+	// down — index 0 left, 1 middle, 2 right, empty for a button that is up.
+	//
+	// It serves the same purpose for the mouse that heldKeys serves for the
+	// keyboard, and it answers a question the keyboard never has to: the X10
+	// encoding's release does not say WHICH button was let go, only that one
+	// was. The buttons this package has reported as down are the only honest
+	// answer, so that is what a button-agnostic release releases.
+	//
+	// Guarded by mu.
+	mouseHeld [3]string
+
 	// Debug callback (optional)
 	debugFn func(string)
 }
@@ -1651,13 +1663,10 @@ func (h *Handler) decodeModifiedCSI(seq string) (string, bool) {
 	if len(body) >= 4 && body[0] == '<' {
 		finalByte := body[len(body)-1]
 		if finalByte == 'M' || finalByte == 'm' {
-			if posKey, actionKey, ok := parseMouseSGR(seq); ok {
-				// For drag events, posKey is empty and position is in actionKey
-				// For other events, emit position first, then action
-				if posKey != "" {
-					h.emitKey(posKey)
+			if keys, ok := h.parseMouseSGR(seq); ok {
+				for _, k := range keys {
+					h.emitKey(k)
 				}
-				h.emitKey(actionKey)
 				return "", true // Signal success but no additional key to emit
 			}
 		}
@@ -1665,13 +1674,10 @@ func (h *Handler) decodeModifiedCSI(seq string) (string, bool) {
 
 	// Check for X10 mouse: ESC [ M Cb Cx Cy (exactly 3 bytes after M)
 	if len(body) == 4 && body[0] == 'M' {
-		if posKey, actionKey, ok := parseMouseX10(seq); ok {
-			// For drag events, posKey is empty and position is in actionKey
-			// For other events, emit position first, then action
-			if posKey != "" {
-				h.emitKey(posKey)
+		if keys, ok := h.parseMouseX10(seq); ok {
+			for _, k := range keys {
+				h.emitKey(k)
 			}
-			h.emitKey(actionKey)
 			return "", true // Signal success but no additional key to emit
 		}
 	}
@@ -1780,26 +1786,7 @@ func modifierPrefix(mod int) string {
 	// no cap for. Order is not meaning -- a consumer that sorts before matching
 	// does not care -- but emitting one fixed order keeps a consumer that
 	// compares strings from having to know which producer it is listening to.
-	prefix := ""
-	if mod&4 != 0 {
-		prefix += "C-" // ctrl
-	}
-	if mod&2 != 0 {
-		prefix += "M-" // mega
-	}
-	if mod&32 != 0 {
-		prefix += "m-" // micro, a key most keyboards do not have
-	}
-	if mod&1 != 0 {
-		prefix += "S-" // shift
-	}
-	if mod&8 != 0 {
-		prefix += "s-" // super / command
-	}
-	if mod&16 != 0 {
-		prefix += "H-" // hyper
-	}
-	return prefix
+	return modsFromKitty(mod + 1).prefix()
 }
 
 // parseModifierParam parses a modifier parameter string to int
@@ -2211,9 +2198,9 @@ func csiKeyIdentity(seq string) (identity string, eventType int, ok bool) {
 
 	switch final {
 	case 'u':
-		// The modifier keys report themselves in their own shape
-		// ("S-Press:Left"), carry no chord name to hold, and are the one thing
-		// whose release is the event rather than the end of one.
+		// The modifier keys report themselves in their own shape ("LMod:S"),
+		// carry no chord name to hold, and are the one thing whose release is
+		// the event rather than the end of one.
 		if _, isModifier := kittyModifierKeys[parseModifierParam(first)]; isModifier {
 			return "", 0, false
 		}
@@ -2366,6 +2353,12 @@ func (h *Handler) ReleaseHeldKeys() []string {
 		names = append(names, name+":Release")
 	}
 	sort.Strings(names) // a map has no order; releases should not be a lottery
+
+	// The mouse's buttons are held the same way and are let go of for the same
+	// reason: the pointer went somewhere else, and the button-up will be
+	// delivered there.
+	names = append(names, h.releaseHeldMouse()...)
+
 	for _, n := range names {
 		h.emitKey(n)
 	}
@@ -2446,45 +2439,44 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 		// these events are the only place the protocol says it. See hyper.go.
 		h.noteModifierSide(modKeyInfo.name, modKeyInfo.side, eventType)
 
-		// Map modifier names to our prefix convention.
+		// A modifier pressed on its OWN, named by side and by the letter its
+		// prefix uses: "LMod:S" is the left Shift key going down, "RMod:C" the
+		// right Control, "Mod:m" a Micro whose producer cannot say which side
+		// it was (or which has only one).
 		//
-		// These are the same letters the modifier PREFIXES use, and they have to
-		// be: a consumer that knows "M-" reads Mega must not meet a second
-		// spelling for the same key here. Two letters were wrong. Mega emitted
-		// "A", a prefix this vocabulary does not have — key-sequence-processor
-		// has no rank for "A-" and a test asserting it never gains one, so those
-		// events could never match a binding. And Micro emitted "M", taking the
-		// letter that belongs to Mega.
-		var prefix string
+		// The letter has to be the prefix letter. A consumer that knows "M-"
+		// reads Mega must not meet a second spelling for the same key here —
+		// this once emitted "A" for Mega, a prefix the vocabulary does not
+		// have, so key-sequence-processor could never match it.
+		//
+		// There is no repeat. Holding a modifier says nothing a repeat could
+		// add: the press already said it went down and the release will say it
+		// came up, and unlike a letter — where a repeat means "type another
+		// one" — there is no second anything to report. Kitty rarely sends one
+		// in any case, since most systems do not auto-repeat modifiers.
+		var letter string
 		switch modKeyInfo.name {
 		case "Shift":
-			prefix = "S"
+			letter = "S"
 		case "Ctrl":
-			prefix = "C"
+			letter = "C"
 		case "Mega":
-			prefix = "M"
+			letter = "M"
 		case "Super":
-			prefix = "s"
+			letter = "s"
 		case "Micro":
-			prefix = "m"
+			letter = "m"
 		case "Hyper":
-			prefix = "H"
+			letter = "H"
 		}
-
-		// Event type suffix
-		var eventSuffix string
-		switch eventType {
-		case 1:
-			eventSuffix = "-Press"
-		case 2:
-			eventSuffix = "-Repeat"
-		case 3:
-			eventSuffix = "-Release"
+		if eventType == 2 {
+			return "", true // consumed, emitting nothing — see above
 		}
-
-		// Add :Left or :Right suffix to distinguish sides
-		// Apps can match on "S-Press" to catch both, or "S-Press:Left" for specific side
-		return prefix + eventSuffix + ":" + modKeyInfo.side, true
+		name := sideMod(modKeyInfo.side) + ":" + letter
+		if eventType == 3 {
+			name += ":Release"
+		}
+		return name, true
 	}
 
 	// Build event suffix for non-modifier keys (only for release, press is default)
@@ -2623,11 +2615,7 @@ func formatLetterKey(letter byte, mod int) string {
 	mod--
 
 	hasShift := mod&1 != 0
-	hasMega := mod&2 != 0
 	hasCtrl := mod&4 != 0
-	hasSuper := mod&8 != 0
-	hasHyper := mod&16 != 0
-	hasMeta := mod&32 != 0
 
 	// Control is spelled with the caret when the key it pairs with is one the
 	// caret is natural for — a letter, here. That choice depends on the BASE
@@ -2650,25 +2638,13 @@ func formatLetterKey(letter byte, mod int) string {
 
 	// Canonical order. The caret already sits against the letter, so every
 	// other modifier precedes it in rank: M- m- S- s- H- ^A.
-	prefix := ""
-	if hasMega {
-		prefix += "M-"
-	}
-	if hasMeta {
-		prefix += "m-"
-	}
-	if hasCtrl && hasShift {
-		// "^A" spent the letter's case on Control, so Shift needs saying.
-		prefix += "S-"
-	}
-	if hasSuper {
-		prefix += "s-"
-	}
-	if hasHyper {
-		prefix += "H-"
-	}
+	m := modsFromKitty(mod + 1)
+	// The letter's own case carries Shift, and Control is spent on the caret —
+	// except that "^A" spent the case on Control, so Shift needs saying again.
+	m.ctrl = false
+	m.shift = hasCtrl && hasShift
 
-	return prefix + keyPart
+	return m.prefix() + keyPart
 }
 
 // symbolShiftMap maps unshifted symbol keycodes to their shifted variants
@@ -2734,34 +2710,26 @@ func formatSymbolKey(symbol byte, mod int) string {
 	}
 	mod--
 
-	hasShift := mod&1 != 0
-	hasMega := mod&2 != 0
-	hasCtrl := mod&4 != 0
-	hasSuper := mod&8 != 0
+	m := modsFromKitty(mod + 1)
 
 	displayChar := symbol
-	if hasShift {
+	if m.shift {
 		if shifted, ok := symbolShiftMap[symbol]; ok {
 			displayChar = shifted
 		}
 	}
 
 	var keyPart string
-	if hasCtrl {
+	if m.ctrl {
 		keyPart = "^" + string(displayChar)
 	} else {
 		keyPart = string(displayChar)
 	}
 
-	prefix := ""
-	if hasSuper {
-		prefix += "s-"
-	}
-	if hasMega {
-		prefix += "M-"
-	}
-
-	return prefix + keyPart
+	// Shift is absorbed into the shifted character and Control into the caret,
+	// so both are spent. Everything else is spelled.
+	m.shift, m.ctrl = false, false
+	return m.prefix() + keyPart
 }
 
 // formatNumberKey formats a number key with modifiers
@@ -2771,48 +2739,39 @@ func formatNumberKey(number byte, mod int) string {
 	}
 	mod--
 
-	hasShift := mod&1 != 0
-	hasMega := mod&2 != 0
-	hasCtrl := mod&4 != 0
-	hasSuper := mod&8 != 0
+	m := modsFromKitty(mod + 1)
 
 	displayChar := number
-	if hasShift {
+	if m.shift {
 		if shifted, ok := numberShiftMap[number]; ok {
 			displayChar = shifted
 		}
 	}
 
 	var keyPart string
-	if hasCtrl {
+	if m.ctrl {
 		keyPart = "^" + string(displayChar)
 	} else {
 		keyPart = string(displayChar)
 	}
 
-	prefix := ""
-	if hasSuper {
-		prefix += "s-"
-	}
-	if hasMega {
-		prefix += "M-"
-	}
-
-	return prefix + keyPart
+	// As above: Shift and Control are spent, the rest are spelled.
+	m.shift, m.ctrl = false, false
+	return m.prefix() + keyPart
 }
 
 // parseMouseSGR parses SGR mouse sequences: ESC [ < Cb ; Cx ; Cy M/m
-// Returns position key, action key, and success flag
-func parseMouseSGR(seq string) (string, string, bool) {
+// Returns the keys to emit, in order, and a success flag.
+func (h *Handler) parseMouseSGR(seq string) ([]string, bool) {
 	// Must start with ESC [ <
 	if len(seq) < 6 || seq[0] != 0x1b || seq[1] != '[' || seq[2] != '<' {
-		return "", "", false
+		return nil, false
 	}
 
 	// Final byte must be M (press) or m (release)
 	finalByte := seq[len(seq)-1]
 	if finalByte != 'M' && finalByte != 'm' {
-		return "", "", false
+		return nil, false
 	}
 	isRelease := finalByte == 'm'
 
@@ -2820,22 +2779,22 @@ func parseMouseSGR(seq string) (string, string, bool) {
 	params := seq[3 : len(seq)-1]
 	parts := splitCSIParams(params)
 	if len(parts) != 3 {
-		return "", "", false
+		return nil, false
 	}
 
 	cb := parseIntParam(parts[0])
 	cx := parseIntParam(parts[1])
 	cy := parseIntParam(parts[2])
 
-	return formatMouseEvent(cb, cx, cy, isRelease)
+	return h.mouseKeys(cb, cx, cy, isRelease), true
 }
 
 // parseMouseX10 parses X10 mouse sequences: ESC [ M Cb Cx Cy
-// Returns position key, action key, and success flag
-func parseMouseX10(seq string) (string, string, bool) {
+// Returns the keys to emit, in order, and a success flag.
+func (h *Handler) parseMouseX10(seq string) ([]string, bool) {
 	// Must be exactly ESC [ M followed by 3 bytes
 	if len(seq) != 6 || seq[0] != 0x1b || seq[1] != '[' || seq[2] != 'M' {
-		return "", "", false
+		return nil, false
 	}
 
 	// Decode button and coordinates (all have 32 added)
@@ -2843,42 +2802,47 @@ func parseMouseX10(seq string) (string, string, bool) {
 	cx := int(seq[4]) - 32
 	cy := int(seq[5]) - 32
 
-	// X10 protocol: button code 3 means release
+	// X10 protocol: button code 3 means release, and does not say of what
 	isRelease := (cb & 3) == 3
 
-	return formatMouseEvent(cb, cx, cy, isRelease)
+	return h.mouseKeys(cb, cx, cy, isRelease), true
 }
 
-// formatMouseEvent formats a mouse event into position and action keys
-// For drag events, position is embedded in action key (MouseLeftDrag@x,y)
-// For press/release/scroll, separate posKey and actionKey are returned
-func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
-	// Decode modifiers from button code
-	hasShift := (cb & 4) != 0
-	hasMega := (cb & 8) != 0
-	hasCtrl := (cb & 16) != 0
+// mouseButtons names the three buttons both encodings can count, in their
+// order: bits 0, 1 and 2 of the button code.
+var mouseButtons = [3]string{"MouseLeft", "MouseMiddle", "MouseRight"}
 
-	// Build modifier prefix
-	prefix := ""
-	if hasShift {
-		prefix += "S-"
-	}
-	if hasMega {
-		prefix += "M-"
-	}
-	if hasCtrl {
-		prefix += "C-"
-	}
+// mouseKeys turns one decoded mouse report into the keys it should be
+// reported as, in the order they should be emitted.
+//
+// A press and a scroll report a position first — Mouse@x,y — and then what
+// happened there. A drag carries its position in the name instead, because a
+// drag IS its position: the pointer moving is the whole event.
+//
+// A release is emitted under the name its PRESS was emitted under, not one
+// derived again from the modifiers as they stand now. Let go of Control before
+// the button and the two would otherwise not match; and a release for a button
+// this package never reported down is not emitted at all, since nothing
+// downstream can believe it is held.
+func (h *Handler) mouseKeys(cb, cx, cy int, isRelease bool) []string {
+	// The mouse encodings carry only these three modifiers, in bit positions of
+	// their own that have nothing to do with the kitty keyboard field.
+	prefix := keyMods{
+		shift: cb&4 != 0,
+		mega:  cb&8 != 0,
+		ctrl:  cb&16 != 0,
+	}.prefix()
 
-	// Decode button and action
-	var action string
 	buttonBits := cb & 3
 	isMotion := (cb & 32) != 0
 	isScroll := (cb & 64) != 0
+	posKey := fmt.Sprintf("Mouse@%d,%d", cx, cy)
 
-	if isScroll {
+	switch {
+	case isScroll:
 		// Scroll wheel. The low two bits select the wheel axis/direction:
 		// 0 = up, 1 = down, 2 = left, 3 = right (SGR buttons 64..67).
+		var action string
 		switch buttonBits {
 		case 0:
 			action = "MouseScrollUp"
@@ -2889,47 +2853,62 @@ func formatMouseEvent(cb, cx, cy int, isRelease bool) (string, string, bool) {
 		case 3:
 			action = "MouseScrollRight"
 		}
-	} else if isMotion {
-		// Mouse drag - include position in action key
-		switch buttonBits {
-		case 0:
-			action = "MouseLeftDrag"
-		case 1:
-			action = "MouseMiddleDrag"
-		case 2:
-			action = "MouseRightDrag"
-		default:
-			action = "MouseDrag"
+		return []string{posKey, prefix + action}
+
+	case isMotion:
+		// A drag names the button being dragged with; bits of 3 mean the
+		// pointer moved with no button down at all.
+		action := "MouseDrag"
+		if buttonBits < 3 {
+			action += strings.TrimPrefix(mouseButtons[buttonBits], "Mouse")
 		}
-		// For drag events, embed position in the action key and return empty posKey
-		return "", fmt.Sprintf("%s%s@%d,%d", prefix, action, cx, cy), true
-	} else if isRelease {
-		// Button release
-		switch buttonBits {
-		case 0:
-			action = "MouseLeftRelease"
-		case 1:
-			action = "MouseMiddleRelease"
-		case 2:
-			action = "MouseRightRelease"
-		default:
-			action = "MouseRelease"
+		return []string{fmt.Sprintf("%s%s@%d,%d", prefix, action, cx, cy)}
+
+	case isRelease:
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		keys := []string{posKey}
+		if buttonBits < 3 {
+			// The encoding named the button, so only that one comes up.
+			if held := h.mouseHeld[buttonBits]; held != "" {
+				h.mouseHeld[buttonBits] = ""
+				keys = append(keys, held+":Release")
+			}
+			return keys
 		}
-	} else {
-		// Button press
-		switch buttonBits {
-		case 0:
-			action = "MouseLeftPress"
-		case 1:
-			action = "MouseMiddlePress"
-		case 2:
-			action = "MouseRightPress"
-		default:
-			action = "MousePress"
+		// X10's release names no button, so every button this package has
+		// reported down comes up — one release each, never a bare one.
+		for i, held := range h.mouseHeld {
+			if held != "" {
+				h.mouseHeld[i] = ""
+				keys = append(keys, held+":Release")
+			}
+		}
+		return keys
+
+	default:
+		if buttonBits > 2 {
+			return []string{posKey}
+		}
+		name := prefix + mouseButtons[buttonBits]
+		h.mu.Lock()
+		h.mouseHeld[buttonBits] = name
+		h.mu.Unlock()
+		return []string{posKey, name}
+	}
+}
+
+// releaseHeldMouse takes every button this package has reported down and
+// returns the releases for them, leaving none held.
+func (h *Handler) releaseHeldMouse() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var names []string
+	for i, held := range h.mouseHeld {
+		if held != "" {
+			h.mouseHeld[i] = ""
+			names = append(names, held+":Release")
 		}
 	}
-
-	// Position key for press/release/scroll
-	posKey := fmt.Sprintf("Mouse@%d,%d", cx, cy)
-	return posKey, prefix + action, true
+	return names
 }

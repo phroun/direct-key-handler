@@ -106,7 +106,8 @@ func TestReleasingASideEndsTheHyper(t *testing.T) {
 	// counting back from the end.
 	var xs []string
 	for _, k := range got {
-		if !strings.HasSuffix(k, ":Left") && !strings.HasSuffix(k, ":Right") {
+		if !strings.HasPrefix(k, "LMod:") && !strings.HasPrefix(k, "RMod:") &&
+			!strings.HasPrefix(k, "Mod:") {
 			xs = append(xs, k)
 		}
 	}
