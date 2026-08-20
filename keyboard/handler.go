@@ -2255,6 +2255,50 @@ func csiKeyIdentity(seq string) (identity string, eventType int, ok bool) {
 	}
 }
 
+// parseKeycodeParam reads the keycode field, where ZERO is a real answer: the
+// protocol's pure text event says the terminal had no key information at all.
+// parseModifierParam floors at 1, which is what a MODIFIER field wants (the
+// set is 1-indexed, so 0 means unset) and would silently turn a text event into
+// a keystroke here.
+func parseKeycodeParam(s string) int {
+	if s == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 1
+	}
+	return n
+}
+
+// parseAssociatedText decodes the kitty protocol's third CSI u field: the text
+// the key produced, as colon-separated decimal codepoints.
+//
+// Empty when the field is absent (the host never asked for flag 16), when it is
+// empty (the key produced nothing), or when it does not parse - a wrong-looking
+// field is worth ignoring, never worth a panic, since it arrives from whatever
+// terminal the process happens to be running under.
+func parseAssociatedText(parts []string) string {
+	if len(parts) < 3 || parts[2] == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, cp := range strings.Split(parts[2], ":") {
+		n, err := strconv.Atoi(cp)
+		if err != nil || n < 0 || n > 0x10FFFF {
+			return ""
+		}
+		b.WriteRune(rune(n))
+	}
+	return b.String()
+}
+
+// chordHeld reports whether a modifier that NAMES a key is held - anything but
+// Shift. The kitty modifier field is 1-indexed, and Shift is bit 1.
+func chordHeld(mod int) bool {
+	return (mod-1)&^1 != 0
+}
+
 // holdByteKey remembers a name for a press that arrived as a plain BYTE.
 //
 // With event reporting on but disambiguation off — what a host asks for when it
@@ -2424,7 +2468,7 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	if idx := strings.Index(keycodeStr, ":"); idx >= 0 {
 		keycodeStr = keycodeStr[:idx]
 	}
-	keycode := parseModifierParam(keycodeStr)
+	keycode := parseKeycodeParam(keycodeStr)
 
 	// Parse modifiers and event type from second part
 	// Format can be: "modifiers" or "modifiers:event_type"
@@ -2441,6 +2485,33 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 		} else {
 			mod = parseModifierParam(modPart)
 		}
+	}
+
+	// The ASSOCIATED TEXT the key produced, when the terminal was asked for it
+	// (flag 16). Colon-separated codepoints in the third field, and the whole
+	// reason a host can turn disambiguation on without losing what was typed:
+	// with the keys reported as escape codes, text stops arriving as text and
+	// the key's own name is all that is left, which is the wrong character
+	// whenever the two differ. A dead key is exactly that case - Option+i then
+	// "u" reports the U KEY and composes "û" - and the "u" is what reached the
+	// document.
+	//
+	// Absent unless asked for, so everything below still works from the keycode
+	// alone when the host never set the flag.
+	text := parseAssociatedText(parts)
+
+	// Keycode 0 is the protocol's PURE TEXT EVENT: text the terminal received
+	// with no key information behind it at all, which is what an input method
+	// delivers when it commits. There is no key here to name, so naming one
+	// would put a phantom keystroke in the document beside the text.
+	if keycode == 0 {
+		if text == "" {
+			// Nothing said. Consumed rather than declined: answering false
+			// sends the caller back to read the sequence byte by byte, which
+			// types the escape and its digits.
+			return "", true
+		}
+		return text, true
 	}
 
 	// Every key says something about the pad's lock, so every key is read for
@@ -2553,6 +2624,18 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	// those re-derive a key from an ASCII base, which a composed glyph is not.
 	if bits := mod - 1; bits&256 != 0 && keycode >= 32 && keycode < 0x110000 {
 		return "G-" + modifierPrefix((bits&^256)+1) + string(rune(keycode)) + eventSuffix, true
+	}
+
+	// What the key TYPED wins over what it is called, when the terminal says
+	// the two differ and nothing but Shift is held. That is the dead key's
+	// completion ("u" composing "û") and any other keystroke the layout or an
+	// input method turns into a different character.
+	//
+	// Only with no chord held: a Control or Mega chord is named for the key so
+	// a keymap can bind it, and the protocol sends no text for one anyway.
+	// Shift is not a chord in that sense - a shifted letter IS its capital.
+	if text != "" && !chordHeld(mod) && text != string(rune(keycode)) {
+		return text + eventSuffix, true
 	}
 
 	// Letter keys
