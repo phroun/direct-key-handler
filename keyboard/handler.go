@@ -1913,7 +1913,16 @@ func parseModifiedCursorKey(finalByte byte, parts []string) (string, bool) {
 		return baseName, true
 	}
 
-	if len(parts) != 2 {
+	// Fewer than two says nothing about modifiers; MORE than two is the
+	// associated text a terminal appends once a host asks for it (flag 16),
+	// and it is not this key's name. A named key is named by its KEY — the
+	// text an input method happened to have in flight while Down was pressed
+	// does not rename Down — so the extra fields are read past.
+	//
+	// Declining instead sent the caller back to read the sequence byte by
+	// byte: the Escape opened a command prompt and "[1;1:2;250B" was typed
+	// into it.
+	if len(parts) < 2 {
 		return "", false
 	}
 
@@ -1938,7 +1947,16 @@ func parseModifiedHomeEnd(finalByte byte, parts []string) (string, bool) {
 		return baseName, true
 	}
 
-	if len(parts) != 2 {
+	// Fewer than two says nothing about modifiers; MORE than two is the
+	// associated text a terminal appends once a host asks for it (flag 16),
+	// and it is not this key's name. A named key is named by its KEY — the
+	// text an input method happened to have in flight while Down was pressed
+	// does not rename Down — so the extra fields are read past.
+	//
+	// Declining instead sent the caller back to read the sequence byte by
+	// byte: the Escape opened a command prompt and "[1;1:2;250B" was typed
+	// into it.
+	if len(parts) < 2 {
 		return "", false
 	}
 
@@ -1965,7 +1983,16 @@ func parseModifiedF1toF4(finalByte byte, parts []string) (string, bool) {
 		return baseName, true
 	}
 
-	if len(parts) != 2 {
+	// Fewer than two says nothing about modifiers; MORE than two is the
+	// associated text a terminal appends once a host asks for it (flag 16),
+	// and it is not this key's name. A named key is named by its KEY — the
+	// text an input method happened to have in flight while Down was pressed
+	// does not rename Down — so the extra fields are read past.
+	//
+	// Declining instead sent the caller back to read the sequence byte by
+	// byte: the Escape opened a command prompt and "[1;1:2;250B" was typed
+	// into it.
+	if len(parts) < 2 {
 		return "", false
 	}
 
@@ -2032,7 +2059,10 @@ func parseModifiedTildeKey(parts []string) (string, bool) {
 		return baseName, true
 	}
 
-	if len(parts) == 2 {
+	// Two or MORE: anything past the modifier field is the associated text a
+	// terminal appends under flag 16, which does not rename this key. See the
+	// cursor-key parser above.
+	if len(parts) >= 2 {
 		mod, event := parseModifierField(parts[1])
 		prefix := modifierPrefix(mod)
 		return prefix + baseName + event, true

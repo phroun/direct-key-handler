@@ -115,3 +115,50 @@ func TestADeadKeyCompletionIsNotDecodedAsAChord(t *testing.T) {
 		t.Errorf("the dead key's completion -> %v, want û", got)
 	}
 }
+
+// The associated text rides on the LEGACY-form keys too, and a named key is
+// still named by its key.
+//
+// Asking for flag 16 makes a terminal append the text field to every family,
+// not only the "u" one — including the cursor keys, Home/End, F1-F4 and the
+// tilde set, whose parsers accepted exactly two parameters and declined a
+// third. Declining sends the caller back to read the sequence byte by byte, so
+// a Down arrow pressed with an input method's text in flight arrived as
+// Escape, "[", "1", ";", ... — the Escape opening a command prompt and the
+// rest typed into it.
+//
+// The text does not rename these: whatever an input method happened to hold
+// while Down was pressed, the key is Down.
+func TestLegacyFormKeysTolerateTheAssociatedText(t *testing.T) {
+	for _, c := range []struct{ what, raw, want string }{
+		{"a cursor key with text", "\x1b[1;1;250B", "Down"},
+		{"a cursor key repeating with text", "\x1b[1;1:2;250B", "Down:Repeat"},
+		{"a cursor key keeps its modifier", "\x1b[1;2;250B", "S-Down"},
+		{"Home/End with text", "\x1b[1;1;250H", "Home"},
+		{"F1-F4 with text", "\x1b[1;1;250P", "F1"},
+		{"the tilde family with text", "\x1b[2;1;250~", "Insert"},
+		{"and the tilde family keeps its modifier", "\x1b[2;2;250~", "S-Insert"},
+	} {
+		got := feedKeys(t, c.raw)
+		if len(got) != 1 || got[0] != c.want {
+			t.Errorf("%s: %q -> %v, want [%s]", c.what, c.raw, got, c.want)
+		}
+	}
+}
+
+// And nothing moves for a terminal that sends no text field.
+func TestLegacyFormKeysAreUnchangedWithoutText(t *testing.T) {
+	for _, c := range []struct{ raw, want string }{
+		{"\x1b[B", "Down"},
+		{"\x1b[1;2B", "S-Down"},
+		{"\x1b[1;1:2B", "Down:Repeat"},
+		{"\x1b[1;2H", "S-Home"},
+		{"\x1b[2~", "Insert"},
+		{"\x1b[1;2P", "S-F1"},
+	} {
+		got := feedKeys(t, c.raw)
+		if len(got) != 1 || got[0] != c.want {
+			t.Errorf("%q -> %v, want [%s]", c.raw, got, c.want)
+		}
+	}
+}
