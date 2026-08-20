@@ -2255,6 +2255,14 @@ func csiKeyIdentity(seq string) (identity string, eventType int, ok bool) {
 	}
 }
 
+// TextPrefix marks a PURE TEXT EVENT: text the terminal received with no key
+// behind it, which is what an input method delivers when it commits. Everything
+// after it is the literal text.
+//
+// A consumer that does not know it should ignore it, which is why it is
+// prefixed at all — an unknown prefix is dropped, where a bare name is typed.
+const TextPrefix = "Text:"
+
 // parseKeycodeParam reads the keycode field, where ZERO is a real answer: the
 // protocol's pure text event says the terminal had no key information at all.
 // parseModifierParam floors at 1, which is what a MODIFIER field wants (the
@@ -2502,8 +2510,23 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 
 	// Keycode 0 is the protocol's PURE TEXT EVENT: text the terminal received
 	// with no key information behind it at all, which is what an input method
-	// delivers when it commits. There is no key here to name, so naming one
-	// would put a phantom keystroke in the document beside the text.
+	// delivers when it commits.
+	//
+	// It goes out PREFIXED, because a bare name means "a key was pressed" and
+	// no key was — the one thing this event exists to say. It also is not a
+	// KeyName: a commit is any length and any content, so "今日" collides with
+	// the spelling grammar the moment it holds a space or a "-", and a consumer
+	// that reads a name one rune at a time drops the rest of it on the floor.
+	//
+	// Everything after the single colon is the literal text, never re-split,
+	// and no event suffix is ever appended: there is no key to repeat or
+	// release, and a suffix would make the payload ambiguous. The protocol
+	// forbids control codes in associated text, so the payload cannot end the
+	// line it travels on.
+	//
+	// "Text" and not "Commit": the protocol defines keycode 0 for a terminal
+	// with no key information, and says nothing about input methods. What it
+	// MEANS is the consumer's to decide.
 	if keycode == 0 {
 		if text == "" {
 			// Nothing said. Consumed rather than declined: answering false
@@ -2511,7 +2534,7 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 			// types the escape and its digits.
 			return "", true
 		}
-		return text, true
+		return TextPrefix + text, true
 	}
 
 	// Every key says something about the pad's lock, so every key is read for
