@@ -228,3 +228,34 @@ func TestBareTextIsAKeyUntilTheTerminalSaysOtherwise(t *testing.T) {
 			got, TextPrefix)
 	}
 }
+
+// A commit is not a key, so it is not HELD and its key's release is not the
+// commit happening again.
+//
+// iTerm2 reports the text field on the way up as well as the way down. Recorded
+// as a held key, the commit went down as "Text:ö" and came back up as
+// "Text:ö:Release" — which a host reads as a composition committing the
+// characters ö : R e l e a s e, and types them into the document.
+func TestACommitIsNotHeldAndDoesNotRepeatOnRelease(t *testing.T) {
+	got := feedKeys(t, "\x1b[97;;246u\x1b[97;1:3u")
+	if len(got) != 2 {
+		t.Fatalf("a commit and its key coming up -> %v, want two events", got)
+	}
+	if got[0] != TextPrefix+"ö" {
+		t.Errorf("the commit -> %q, want %q", got[0], TextPrefix+"ö")
+	}
+	if got[1] != "a:Release" {
+		t.Errorf("the key coming up -> %q, want the KEY, named from its keycode",
+			got[1])
+	}
+}
+
+// And a release that carries the text anyway commits nothing. A key coming up
+// types no characters, whatever the terminal chooses to say alongside it.
+func TestAReleaseCarryingTextIsStillJustAKeyComingUp(t *testing.T) {
+	got := feedKeys(t, "\x1b[97;;246u\x1b[97;1:3;246u")
+	if len(got) != 2 || got[1] != "a:Release" {
+		t.Errorf("a release carrying the text -> %v, want the second to be "+
+			"a:Release and the composition delivered once", got)
+	}
+}
