@@ -259,3 +259,43 @@ func TestAReleaseCarryingTextIsStillJustAKeyComingUp(t *testing.T) {
 			"a:Release and the composition delivered once", got)
 	}
 }
+
+// A palette's alternatives are not Option chords, however much they look like
+// them.
+//
+// An accent palette on "o" offers "œ" and "ø" among its nine, and those are
+// also Option+q and Option+o. Claimed for the Option table they stopped being
+// text: the composition never committed, and the letter the palette opened over
+// stayed in the document with the selector digit beside it — "o6œ" where "œ"
+// belonged, and only ever for those two of the nine.
+//
+// The keycode is what tells them apart. Option+a reports the "a" key and the
+// decode agrees with it; a palette reports whatever key confirmed the choice,
+// or a key nobody touched.
+func TestAPaletteAlternativeIsNotAnOptionChord(t *testing.T) {
+	for _, c := range []struct{ what, raw, want string }{
+		// "œ" is U+0153, chosen with the comma that dismissed the palette.
+		{"œ from the palette", "\x1b[44;;339u", TextPrefix + "œ"},
+		// "ø" is U+00F8, on the keycode iTerm2 reports for a click.
+		{"ø from the palette", "\x1b[97;;248u", TextPrefix + "ø"},
+	} {
+		got := feedDecoded(t, c.raw)
+		if len(got) == 0 || got[len(got)-1] != c.want {
+			t.Errorf("%s: %q -> %v, want %q", c.what, c.raw, got, c.want)
+		}
+	}
+}
+
+// And the chord itself still is one: the decode agrees with the keycode.
+func TestTheOptionChordOnItsOwnKeyIsStillAChord(t *testing.T) {
+	for _, c := range []struct{ what, raw, want string }{
+		{"Option+o reporting the o key", "\x1b[111;1;248u", "M-o"},
+		{"Option+q reporting the q key", "\x1b[113;1;339u", "M-q"},
+		{"and its shifted form on the same key", "\x1b[111;1;216u", "M-O"},
+	} {
+		got := feedDecoded(t, c.raw)
+		if len(got) == 0 || got[len(got)-1] != c.want {
+			t.Errorf("%s: %q -> %v, want %q", c.what, c.raw, got, c.want)
+		}
+	}
+}

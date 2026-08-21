@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -1128,25 +1129,36 @@ func (h *Handler) textWithoutAKey(s string) bool {
 	h.mu.Lock()
 	saw := h.sawAssociatedText
 	h.mu.Unlock()
-	if !saw || h.optionChordClaims(s) {
+	if !saw {
 		return false
 	}
 	h.emitKey(TextPrefix + s)
 	return true
 }
 
-// optionChordClaims reports whether the macOS Option table has a chord for this
-// text, in which case it is not text at all and must keep the name emitKey will
-// decode.
+// optionChordClaims reports whether this text is the Option chord of THIS key,
+// in which case it is not text at all and must keep the name emitKey decodes.
 //
 // "å" is Option+a — a bindable chord — and whether an unbound one types the
 // character is the RECIPIENT's business, not this package's. emitKey does that
 // decoding on the way out and it only recognises a single-rune name, so text
-// sent out under a prefix would sail straight past it and arrive as a
-// character nobody could bind.
+// sent out under a prefix would sail straight past it and arrive as a character
+// nobody could bind.
+//
+// The KEYCODE is what decides it, and has to. Being in the Option table means
+// only that some key with Option held produces the character, not that this key
+// did: an accent palette offers "œ" and "ø" among its alternatives, which are
+// also Option+q and Option+o, and claiming those turned a chosen character into
+// a chord — the composition never committed, and the letter it opened over
+// stayed with the palette's selector digit beside it. Option+a reports keycode
+// "a" and the two agree; a palette reports whatever key confirmed it, or a key
+// nobody touched, and they do not.
+//
+// Case-folded, since the shifted form of the chord is the capital: "Ø" decodes
+// to "M-O" on the same "o" key.
 //
 // Off when the decode is off, since then "å" really is just a character.
-func (h *Handler) optionChordClaims(s string) bool {
+func (h *Handler) optionChordClaims(s string, keycode int) bool {
 	h.mu.Lock()
 	decode := h.decodeMacOSOption
 	h.mu.Unlock()
@@ -1157,8 +1169,15 @@ func (h *Handler) optionChordClaims(s string) bool {
 	if size != len(s) || r == utf8.RuneError {
 		return false
 	}
-	_, claimed := decodeOptionChar(r)
-	return claimed
+	decoded, claimed := decodeOptionChar(r)
+	if !claimed || len(decoded) < 3 || decoded[0] != 'M' || decoded[1] != '-' {
+		return false
+	}
+	base, bsize := utf8.DecodeRuneInString(decoded[2:])
+	if bsize != len(decoded[2:]) {
+		return false
+	}
+	return unicode.ToLower(base) == unicode.ToLower(rune(keycode))
 }
 
 // couldBeEscapePrefix checks if seq could be a prefix of a valid escape sequence
@@ -2805,7 +2824,7 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	// deliver the composition a second time. What came up is the physical key,
 	// so it is named from its keycode like any other release.
 	if text != "" && text != string(rune(keycode)) {
-		if !heldModifier(mod) && !h.optionChordClaims(text) {
+		if !heldModifier(mod) && !h.optionChordClaims(text, keycode) {
 			if eventType != 3 {
 				return TextPrefix + text, true
 			}
