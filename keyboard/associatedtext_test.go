@@ -12,11 +12,17 @@ import (
 // and the key's own name is all that is left. That is the wrong character
 // whenever the two differ: Option+i then "u" composes "û" and reports the U
 // KEY, so a "u" reached the document where the accented letter belonged.
+//
+// What it BECOMES depends on the modifier. With none held nobody typed the
+// character that arrived — no cap on the keyboard says û — so it is text with
+// no key behind it and goes out prefixed. With Shift held the text IS that key
+// wearing that modifier, and "A" stays a name a keymap can bind.
 func TestAssociatedTextNamesTheKey(t *testing.T) {
 	for _, c := range []struct{ what, raw, want string }{
-		{"a dead key's completion", "\x1b[117;1;251u", "û"},
+		{"a dead key's completion", "\x1b[117;1;251u", TextPrefix + "û"},
 		{"a plain letter, text and name agreeing", "\x1b[97;1;97u", "a"},
-		{"several codepoints from one key", "\x1b[97;1;97:769u", "a\u0301"},
+		{"a capital is the Shift key, not text", "\x1b[97;2;65u", "A"},
+		{"several codepoints from one key", "\x1b[97;1;97:769u", TextPrefix + "a\u0301"},
 	} {
 		got := feedKeys(t, c.raw)
 		if len(got) == 0 || got[len(got)-1] != c.want {
@@ -109,10 +115,11 @@ func TestAssociatedTextLeavesTheOptionChordAlone(t *testing.T) {
 }
 
 // A dead key's completion is still the character it composed, not a chord:
-// "û" is not in the Option table, so nothing claims it.
+// "û" is not in the Option table, so nothing claims it and it stays text.
 func TestADeadKeyCompletionIsNotDecodedAsAChord(t *testing.T) {
-	if got := feedDecoded(t, "\x1b[117;1;251u"); len(got) == 0 || got[len(got)-1] != "û" {
-		t.Errorf("the dead key's completion -> %v, want û", got)
+	want := TextPrefix + "û"
+	if got := feedDecoded(t, "\x1b[117;1;251u"); len(got) == 0 || got[len(got)-1] != want {
+		t.Errorf("the dead key's completion -> %v, want %q", got, want)
 	}
 }
 
@@ -160,5 +167,64 @@ func TestLegacyFormKeysAreUnchangedWithoutText(t *testing.T) {
 		if len(got) != 1 || got[0] != c.want {
 			t.Errorf("%q -> %v, want [%s]", c.raw, got, c.want)
 		}
+	}
+}
+
+// The three terminals captured for this deliver a press-and-hold palette's
+// result three different ways, and all three have to arrive as text.
+//
+// iTerm2 reports it on a key event whose keycode is unrelated to the character
+// — 44 is the comma that dismissed the palette, 97 the "a" key nobody touched —
+// while kitty packs the whole thing into one event's text field. What they
+// agree on is that no modifier is held, which is what separates a commit from a
+// capital.
+func TestAPaletteCommitIsTextOnEveryTerminalCaptured(t *testing.T) {
+	for _, c := range []struct{ what, raw, want string }{
+		{"iTerm2 and ghostty, dismissed by typing", "\x1b[44;;246u", "ö"},
+		{"iTerm2, chosen by clicking", "\x1b[97;;246u", "ö"},
+		{"kitty, the commit and the key that dismissed it", "\x1b[44;1:2;246:44u", "ö,"},
+		{"every terminal, chosen with Return", "\x1b[13;1:2;246u", "ö"},
+	} {
+		got := feedKeys(t, c.raw)
+		if len(got) == 0 || got[len(got)-1] != TextPrefix+c.want {
+			t.Errorf("%s: %q -> %v, want %q", c.what, c.raw, got, TextPrefix+c.want)
+		}
+	}
+}
+
+// The character the palette was open OVER is an ordinary key, and so is the
+// digit that picked out of it. Both report text that IS their keycode, which is
+// a key saying what it typed rather than an input method speaking.
+func TestTheKeysAroundACommitAreStillKeys(t *testing.T) {
+	for _, c := range []struct{ what, raw, want string }{
+		{"the letter the palette opened over", "\x1b[111;;111u", "o"},
+		{"its repeats", "\x1b[111;1:2;111u", "o:Repeat"},
+		{"the selector digit, iTerm2 and ghostty", "\x1b[52;;52u", "4"},
+		{"the selector digit, kitty, which reports no text", "\x1b[52u", "4"},
+	} {
+		got := feedKeys(t, c.raw)
+		if len(got) == 0 || got[len(got)-1] != c.want {
+			t.Errorf("%s: %q -> %v, want %q", c.what, c.raw, got, c.want)
+		}
+	}
+}
+
+// kitty and ghostty write the commit as BARE TEXT, outside the protocol
+// entirely, with no key event of any kind around it.
+//
+// It can only be read as text once the terminal has shown it reports keys as
+// escape sequences, which it does by sending one carrying associated text. A
+// plain byte before that is what it has always been — somebody typing.
+func TestBareTextIsAKeyUntilTheTerminalSaysOtherwise(t *testing.T) {
+	if got := feedKeys(t, "ö"); len(got) != 1 || got[0] != "ö" {
+		t.Errorf("bare text from a terminal that has said nothing -> %v, "+
+			"want it named as the key it has always been", got)
+	}
+
+	// Now with the terminal having demonstrated the flag first.
+	got := feedKeys(t, "\x1b[97;;97uö")
+	if len(got) != 2 || got[0] != "a" || got[1] != TextPrefix+"ö" {
+		t.Errorf("bare text after an associated-text event -> %v, want [a %sö]",
+			got, TextPrefix)
 	}
 }

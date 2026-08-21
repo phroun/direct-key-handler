@@ -124,6 +124,25 @@ type Handler struct {
 	// macOS Option key decoding
 	decodeMacOSOption bool // When true, decode macOS Option+key chars to M-key notation
 
+	// sawAssociatedText stands once a key event has arrived carrying the
+	// protocol's third field — the text the key produced. A terminal only sends
+	// that when the host asked for it (flag 0b10000), and the protocol defines
+	// that flag as an enhancement to report-all-keys, so a terminal that sends
+	// one is a terminal reporting EVERY key as an escape sequence.
+	//
+	// Which settles what a plain byte means. Before this stands, a printable
+	// byte is a key being typed, as it has been since terminals began. After
+	// it, no key can arrive that way — so text that does is text with no key
+	// behind it, which is what an input method commits. See processByte.
+	//
+	// Learnt rather than configured, on purpose. A host that PUSHED the flags
+	// cannot say whether the terminal honoured them, and being told "every key
+	// is an escape sequence" by a terminal that quietly refused would turn
+	// every keystroke into text and leave no keymap matching anything. The
+	// evidence has to come from the terminal, and this is the terminal
+	// demonstrating it.
+	sawAssociatedText bool
+
 	// keyNames renames keys on the way out (see Options.KeyNames). Read-only
 	// after New, so it needs no lock.
 	keyNames map[Key]string
@@ -1033,6 +1052,9 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 
 	// Regular printable character or start of UTF-8 sequence
 	if b < 128 {
+		if h.textWithoutAKey(string(b)) {
+			return
+		}
 		h.holdByteKey(b, string(b))
 		h.emitKey(string(b))
 		return
@@ -1047,7 +1069,9 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 			h.utf8Remaining--
 			if h.utf8Remaining == 0 {
 				// Complete UTF-8 sequence - emit the character
-				h.emitKey(string(h.utf8Buffer))
+				if !h.textWithoutAKey(string(h.utf8Buffer)) {
+					h.emitKey(string(h.utf8Buffer))
+				}
 				h.utf8Buffer = nil
 			}
 		} else {
@@ -1080,6 +1104,61 @@ func (h *Handler) processByte(b byte, escTimeout *time.Timer) {
 		// Invalid UTF-8 lead byte or bare continuation byte - emit as-is
 		h.emitKey(string(rune(b)))
 	}
+}
+
+// textWithoutAKey emits a printable character as TEXT rather than as a key, and
+// reports whether it did.
+//
+// It answers true only once the terminal has shown it reports keys as escape
+// sequences, by sending one carrying the text the key produced (see
+// sawAssociatedText). From then on a printable byte cannot be a keystroke,
+// because a keystroke would have arrived as a sequence — so what it is instead
+// is text with no key behind it, which is an input method committing.
+//
+// kitty and ghostty both deliver a press-and-hold palette's result this way:
+// the chosen character arrives as bare UTF-8, outside the protocol entirely,
+// with no key event of any kind around it. Named as a key it is indis-
+// tinguishable from the user typing that character, which is what left the
+// letter the palette opened over standing in front of it.
+//
+// Not held as a byte key either. holdByteKey exists so a press that arrived as
+// a byte can be matched by the release that arrives as a sequence, and there is
+// no key here to come back up.
+func (h *Handler) textWithoutAKey(s string) bool {
+	h.mu.Lock()
+	saw := h.sawAssociatedText
+	h.mu.Unlock()
+	if !saw || h.optionChordClaims(s) {
+		return false
+	}
+	h.emitKey(TextPrefix + s)
+	return true
+}
+
+// optionChordClaims reports whether the macOS Option table has a chord for this
+// text, in which case it is not text at all and must keep the name emitKey will
+// decode.
+//
+// "å" is Option+a — a bindable chord — and whether an unbound one types the
+// character is the RECIPIENT's business, not this package's. emitKey does that
+// decoding on the way out and it only recognises a single-rune name, so text
+// sent out under a prefix would sail straight past it and arrive as a
+// character nobody could bind.
+//
+// Off when the decode is off, since then "å" really is just a character.
+func (h *Handler) optionChordClaims(s string) bool {
+	h.mu.Lock()
+	decode := h.decodeMacOSOption
+	h.mu.Unlock()
+	if !decode {
+		return false
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	if size != len(s) || r == utf8.RuneError {
+		return false
+	}
+	_, claimed := decodeOptionChar(r)
+	return claimed
 }
 
 // couldBeEscapePrefix checks if seq could be a prefix of a valid escape sequence
@@ -2538,6 +2617,15 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	// alone when the host never set the flag.
 	text := parseAssociatedText(parts)
 
+	// The field being here at all is the terminal saying it reports keys as
+	// escape sequences, which is what tells a plain byte apart from a key
+	// later on. See sawAssociatedText.
+	if text != "" {
+		h.mu.Lock()
+		h.sawAssociatedText = true
+		h.mu.Unlock()
+	}
+
 	// Keycode 0 is the protocol's PURE TEXT EVENT: text the terminal received
 	// with no key information behind it at all, which is what an input method
 	// delivers when it commits.
@@ -2680,15 +2768,32 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	}
 
 	// What the key TYPED wins over what it is called, when the terminal says
-	// the two differ and nothing but Shift is held. That is the dead key's
-	// completion ("u" composing "û") and any other keystroke the layout or an
-	// input method turns into a different character.
+	// the two differ. That is the dead key's completion ("u" composing "û"),
+	// an input method's commit, and any other keystroke the layout turns into
+	// a different character.
 	//
-	// Only with no chord held: a Control or Mega chord is named for the key so
-	// a keymap can bind it, and the protocol sends no text for one anyway.
-	// Shift is not a chord in that sense - a shifted letter IS its capital.
-	if text != "" && !chordHeld(mod) && text != string(rune(keycode)) {
-		return text + eventSuffix, true
+	// The MODIFIER decides which of the two it becomes, and the line is drawn
+	// where it is because both sides of it are common. With a hand on a
+	// modifier the text is that key wearing that modifier — Shift and "a"
+	// produce "A", and "A" is a key a keymap can bind. With no modifier at all
+	// nobody typed the character that arrived: no cap on the keyboard says ö,
+	// and none says û. That is an input method or a layout speaking, and it
+	// goes out PREFIXED for the reason the keycode-0 path above gives — a bare
+	// name means a key was pressed, and no key was.
+	//
+	// Every commit captured from iTerm2, kitty and ghostty reports no modifier
+	// (the field empty, or "1"), and every capital reports Shift, so the rule
+	// separates them cleanly on real terminals rather than only in principle.
+	//
+	// A chord is left alone entirely: a Control or Mega chord is named for the
+	// key so a keymap can bind it, and the protocol sends no text for one.
+	if text != "" && text != string(rune(keycode)) {
+		if !heldModifier(mod) && !h.optionChordClaims(text) {
+			return TextPrefix + text, true
+		}
+		if !chordHeld(mod) {
+			return text + eventSuffix, true
+		}
 	}
 
 	// Letter keys
