@@ -2474,6 +2474,18 @@ func (h *Handler) reconcileHeld(seq, name string) (string, bool) {
 		return name, true
 	}
 
+	// A TEXT EVENT is not a key and is not held. Nothing is going to come back
+	// up, and an event marker on the end of one is not a marker at all — it is
+	// part of the payload, since everything after the prefix is literal text.
+	//
+	// Recorded as a key it was: an input method's commit went down under the
+	// keycode the terminal happened to attach it to, and the release of that
+	// key came back out as "Text:ö:Release", which the host read as a
+	// composition committing the characters ö : R e l e a s e.
+	if strings.HasPrefix(name, TextPrefix) {
+		return name, true
+	}
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	switch eventType {
@@ -2787,11 +2799,17 @@ func (h *Handler) parseKittyProtocol(parts []string) (string, bool) {
 	//
 	// A chord is left alone entirely: a Control or Mega chord is named for the
 	// key so a keymap can bind it, and the protocol sends no text for one.
+	//
+	// A RELEASE is never text. A key coming up commits nothing, and a terminal
+	// that repeats the text field on the way up — iTerm2 does — would otherwise
+	// deliver the composition a second time. What came up is the physical key,
+	// so it is named from its keycode like any other release.
 	if text != "" && text != string(rune(keycode)) {
 		if !heldModifier(mod) && !h.optionChordClaims(text) {
-			return TextPrefix + text, true
-		}
-		if !chordHeld(mod) {
+			if eventType != 3 {
+				return TextPrefix + text, true
+			}
+		} else if !chordHeld(mod) {
 			return text + eventSuffix, true
 		}
 	}
