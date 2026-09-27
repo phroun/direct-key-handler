@@ -82,6 +82,7 @@ type Handler struct {
 
 	// State
 	running        bool
+	paused         bool // Running, but the terminal is handed back (see Pause)
 	inLineReadMode bool // True when line assembly is active
 
 	// Line assembly state - stores raw bytes for proper I/O semantics
@@ -367,6 +368,7 @@ func (h *Handler) Stop() error {
 	// Signal stop
 	close(h.stopChan)
 	h.running = false
+	h.paused = false
 
 	// Forget which keys were down. Nothing is emitted for them — the consumer
 	// is going away, and a release delivered during shutdown reaches nobody —
