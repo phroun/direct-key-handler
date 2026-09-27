@@ -103,6 +103,19 @@ handler.OnPaste = func(content []byte) {
 }
 ```
 
+### Pause and Resume
+
+For job control: hand the terminal back in cooked mode before the process
+stops itself, and take it again once it is continued. Unlike `Stop`, the
+handler keeps running, so no restart is needed. Pausing emits a release for
+every key still held, since their real key-ups go to the shell.
+
+```go
+handler.Pause()                        // cooked mode, held keys released
+syscall.Kill(0, syscall.SIGTSTP)       // stop until SIGCONT
+handler.Resume()                       // raw mode again
+```
+
 Build the sample app:
 
 ```bash
